@@ -22,14 +22,13 @@ PLAN_SCOUT = {
     'tagline': 'Perfect for beginners exploring automation',
     'emoji': '🔰',
     'max_accounts': 1,
-    'group_delay': 180,
     'msg_delay': 60,
-    'round_delay': 10800,
+    'round_delay': 900,
     'auto_reply_enabled': False,
     'max_topics': 2,
     'max_groups_per_topic': 10,
     'logs_enabled': False,
-    'description': '1 account, slow delays, basic features',
+    'description': '1 account, slow delays (60s/900s), basic features',
 }
 
 PLAN_GROW = {
@@ -39,14 +38,13 @@ PLAN_GROW = {
     'tagline': 'Scale your reach with multiple accounts',
     'emoji': '📈',
     'max_accounts': 3,
-    'group_delay': 120,
-    'msg_delay': 45,
-    'round_delay': 7200,
+    'msg_delay': 30,
+    'round_delay': 600,
     'auto_reply_enabled': True,
     'max_topics': 5,
     'max_groups_per_topic': 50,
     'logs_enabled': True,
-    'description': '3 accounts, medium delays, auto-reply + logs + 🔄 Smart Rotation + 👥 Auto Group Join',
+    'description': '3 accounts, medium delays (30s/600s), auto-reply + logs + 🔄 Smart Rotation + 👥 Auto Group Join',
 }
 
 PLAN_PRIME = {
@@ -56,14 +54,13 @@ PLAN_PRIME = {
     'tagline': 'Advanced automation for serious marketers',
     'emoji': '⭐',
     'max_accounts': 7,
-    'group_delay': 80,
-    'msg_delay': 30,
-    'round_delay': 5400,
+    'msg_delay': 10,
+    'round_delay': 120,
     'auto_reply_enabled': True,
     'max_topics': 9,
     'max_groups_per_topic': 100,
     'logs_enabled': True,
-    'description': '7 accounts, faster delays, full features + 🔄 Smart Rotation + 👥 Auto Group Join',
+    'description': '7 accounts, fast delays (10s/120s), full features + 🔄 Smart Rotation + 👥 Auto Group Join',
 }
 
 PLAN_DOMINION = {
@@ -73,14 +70,13 @@ PLAN_DOMINION = {
     'tagline': 'Ultimate power for advertising domination',
     'emoji': '👑',
     'max_accounts': 15,
-    'group_delay': 60,
-    'msg_delay': 20,
-    'round_delay': 3600,
+    'msg_delay': 10,
+    'round_delay': 120,
     'auto_reply_enabled': True,
     'max_topics': 15,
     'max_groups_per_topic': 200,
     'logs_enabled': True,
-    'description': '15 accounts, fastest delays, priority support + 🔄 Smart Rotation + 👥 Auto Group Join',
+    'description': '15 accounts, fastest delays (10s/120s), priority support + 🔄 Smart Rotation + 👥 Auto Group Join',
 }
 
 PLANS = {
@@ -96,16 +92,16 @@ PREMIUM_TIER = PLAN_DOMINION.copy()
 ADMIN_USERNAME = "aztechdeveloper"
 
 MESSAGES = {
-    'welcome': "Welcome to Ads Bot!\n\nManage your Telegram advertising campaigns with ease.",
-    'welcome_image': os.getenv('WELCOME_IMAGE', 'https://i.ibb.co/hxPHLpz3/photo-2026-01-18-08-07-41.jpg'),
+    'welcome': "Welcome to AztechAds Bot!\n\nManage your Telegram advertising campaigns with ease.",
+    'welcome_image': os.getenv('WELCOME_IMAGE', 'https://i.ibb.co/bg4ZtxrR/Chat-GPT-Image-Jan-19-2026-12-27-33-AM.png'),
 
     # ===================== Account Profile Templates =====================
     # Applied to ALL added accounts when user opens dashboard (/start).
     # First name is preserved as-is.
     # Last name is forced to this tag (removes any existing last name).
-    'account_last_name_tag': '| @aztechadsbot',
+    'account_last_name_tag': '| @AzTechAdsBot',
     # Bio is forced to this text (removes any existing bio).
-    'account_bio': 'Smart Ads Automation • @aztechadsbot',
+    'account_bio': 'Smart Ads Automation • @AzTechAdsBot',
     'support_link': os.getenv('SUPPORT_LINK', 'https://t.me/aztechdeveloper'),
     'updates_link': os.getenv('UPDATES_LINK', 'https://t.me/aztechdeveloper'),
     'premium_contact': "Contact admin to purchase Premium access.\n\nPremium Benefits:\n- More accounts\n- Faster delays\n- Auto-reply feature\n- Detailed logs\n- Priority support",
@@ -113,7 +109,7 @@ MESSAGES = {
     # Privacy Policy
     'privacy_short': (
         "<b>📜 Privacy Policy & Terms of Service</b>\n\n"
-        "<blockquote>By using Kabru Ads Bot, you acknowledge and agree to:\n\n"
+        "<blockquote>By using AztechAds Bot, you acknowledge and agree to:\n\n"
         "<b>✓ Service Usage:</b>\n"
         "• Automated broadcasting across Telegram groups\n"
         "• Responsible and ethical use of the platform\n"
@@ -143,7 +139,7 @@ FORCE_JOIN = {
     # group_username removed (no forced group join)
 
     # Lock screen visuals
-    'image_url': os.getenv('FORCE_JOIN_IMAGE', 'https://i.ibb.co/hxPHLpz3/photo-2026-01-18-08-07-41.jpg'),
+    'image_url': os.getenv('FORCE_JOIN_IMAGE', 'https://i.ibb.co/bg4ZtxrR/Chat-GPT-Image-Jan-19-2026-12-27-33-AM.png'),
     'message': os.getenv(
         'FORCE_JOIN_MESSAGE',
         "**Access Locked**\n\nPlease join our **Channel** and **Group** to use this bot.\n\nAfter joining, click **Verify**."
@@ -151,7 +147,7 @@ FORCE_JOIN = {
 }
 
 # Plan selection screen image
-PLAN_IMAGE_URL = os.getenv('PLAN_IMAGE_URL', 'https://i.ibb.co/hxPHLpz3/photo-2026-01-18-08-07-41.jpg')
+PLAN_IMAGE_URL = os.getenv('PLAN_IMAGE_URL', 'https://i.ibb.co/bg4ZtxrR/Chat-GPT-Image-Jan-19-2026-12-27-33-AM.png')
 
 # ===================== Payment Config =====================
 # Manual UPI payment (no crypto)
@@ -167,9 +163,9 @@ ADMIN_SETTINGS = {
 }
 
 INTERVAL_PRESETS = {
-    'slow': {'group_delay': 180, 'msg_delay': 60, 'round_delay': 10800, 'name': 'Slow (Safe)'},
-    'medium': {'group_delay': 120, 'msg_delay': 45, 'round_delay': 7200, 'name': 'Medium (Balanced)'},
-    'fast': {'group_delay': 60, 'msg_delay': 20, 'round_delay': 3600, 'name': 'Fast (Risky)'},
+    'slow': {'msg_delay': 60, 'round_delay': 900, 'name': 'Slow (Safe)'},
+    'medium': {'msg_delay': 30, 'round_delay': 600, 'name': 'Medium (Balanced)'},
+    'fast': {'msg_delay': 10, 'round_delay': 120, 'name': 'Fast (Risky)'},
 }
 
 TOPICS = ['instagram', 'exchange', 'twitter', 'telegram', 'minecraft', 'tiktok', 'youtube', 'whatsapp', 'other']
