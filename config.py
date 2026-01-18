@@ -3,13 +3,13 @@ import os
 BOT_CONFIG = {
     'api_id': int(os.getenv('TELEGRAM_API_ID', '33388685')),
     'api_hash': os.getenv('TELEGRAM_API_HASH', '8a39446c6f69527dbfbb8e0e6c6a146f'),
-    'bot_token': os.getenv('BOT_TOKEN', '8458516790:AAGVNZ3prRmEERf4iz8QM9ff__R3Fun33Po'),
+    'bot_token': os.getenv('BOT_TOKEN', '8407662292:AAFWtt2AFyLu1NK25n5SN_AdaTujhVmH8-w'),
     'owner_id': int(os.getenv('OWNER_ID', '6670166083')),
     'access_password': os.getenv('ACCESS_PASSWORD', 'ADSREACHOP'),
-    'mongo_uri': os.getenv('MONGO_URI', 'mongodb+srv://aztech:ayazahmed1122@cluster0.mhuaw3q.mongodb.net/kabruads_db?retryWrites=true&w=majority'),
-    'db_name': os.getenv('MONGO_DB_NAME', 'kabruads_db'),
-    'logger_bot_token': os.getenv('LOGGER_BOT_TOKEN', '8597566222:AAHkk_sHkcqVx5DVFEhYgeh2QyL8-Jmlg4Q'),
-    'logger_bot_username': os.getenv('LOGGER_BOT_USERNAME', 'Kabrulogsbot'),
+    'mongo_uri': os.getenv('MONGO_URI', 'mongodb+srv://aztech:ayazahmed1122@cluster0.mhuaw3q.mongodb.net/aztechads_db?retryWrites=true&w=majority'),
+    'db_name': os.getenv('MONGO_DB_NAME', 'aztechads_db'),
+    'logger_bot_token': os.getenv('LOGGER_BOT_TOKEN', '8392058083:AAG1XN-1XqZMRmhtA2OrNvVT3jesMEKEuTI'),
+    'logger_bot_username': os.getenv('LOGGER_BOT_USERNAME', 'aztechloggersbot'),
 }
 
 # ===================== PLAN TIERS =====================
@@ -93,21 +93,21 @@ PLANS = {
 # Backwards compat (old code references FREE_TIER/PREMIUM_TIER)
 FREE_TIER = PLAN_SCOUT.copy()
 PREMIUM_TIER = PLAN_DOMINION.copy()
-ADMIN_USERNAME = "axcne"
+ADMIN_USERNAME = "aztechdeveloper"
 
 MESSAGES = {
     'welcome': "Welcome to Ads Bot!\n\nManage your Telegram advertising campaigns with ease.",
-    'welcome_image': os.getenv('WELCOME_IMAGE', 'https://i.postimg.cc/5NQ0xZBw/photo-2026-01-11-03-10-28.jpg'),
+    'welcome_image': os.getenv('WELCOME_IMAGE', 'https://i.ibb.co/hxPHLpz3/photo-2026-01-18-08-07-41.jpg'),
 
     # ===================== Account Profile Templates =====================
     # Applied to ALL added accounts when user opens dashboard (/start).
     # First name is preserved as-is.
     # Last name is forced to this tag (removes any existing last name).
-    'account_last_name_tag': '| @kabruadsbot',
+    'account_last_name_tag': '| @aztechadsbot',
     # Bio is forced to this text (removes any existing bio).
-    'account_bio': 'Smart Ads Automation • @Kabru_adbot',
-    'support_link': os.getenv('SUPPORT_LINK', 'https://t.me/kabruadsbot'),
-    'updates_link': os.getenv('UPDATES_LINK', 'https://t.me/kabruadsbot'),
+    'account_bio': 'Smart Ads Automation • @aztechadsbot',
+    'support_link': os.getenv('SUPPORT_LINK', 'https://t.me/aztechdeveloper'),
+    'updates_link': os.getenv('UPDATES_LINK', 'https://t.me/aztechdeveloper'),
     'premium_contact': "Contact admin to purchase Premium access.\n\nPremium Benefits:\n- More accounts\n- Faster delays\n- Auto-reply feature\n- Detailed logs\n- Priority support",
     
     # Privacy Policy
@@ -129,7 +129,7 @@ MESSAGES = {
         "• Use reasonable delays between messages</blockquote>\n\n"
         "<i>We prioritize your security and privacy.</i>"
     ),
-    'privacy_full_link': os.getenv('PRIVACY_URL', 'https://jarvisads.site/privacy'),
+    'privacy_full_link': os.getenv('PRIVACY_URL', 'https://telegra.ph/Privacy-Policy-11-01-463'),
 }
 
 # ===================== Force Join (Config-based) =====================
@@ -139,11 +139,11 @@ FORCE_JOIN = {
     'enabled': os.getenv('FORCE_JOIN_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on'),
 
     # Public @usernames (without @). Example: 'AdsReachUpdates'
-    'channel_username': os.getenv('FORCE_JOIN_CHANNEL', 'kabruadsbot'),
+    'channel_username': os.getenv('FORCE_JOIN_CHANNEL', 'aztechshub'),
     # group_username removed (no forced group join)
 
     # Lock screen visuals
-    'image_url': os.getenv('FORCE_JOIN_IMAGE', 'https://i.postimg.cc/5NQ0xZBw/photo-2026-01-11-03-10-28.jpg'),
+    'image_url': os.getenv('FORCE_JOIN_IMAGE', 'https://i.ibb.co/hxPHLpz3/photo-2026-01-18-08-07-41.jpg'),
     'message': os.getenv(
         'FORCE_JOIN_MESSAGE',
         "**Access Locked**\n\nPlease join our **Channel** and **Group** to use this bot.\n\nAfter joining, click **Verify**."
@@ -151,14 +151,14 @@ FORCE_JOIN = {
 }
 
 # Plan selection screen image
-PLAN_IMAGE_URL = os.getenv('PLAN_IMAGE_URL', 'https://i.postimg.cc/5NQ0xZBw/photo-2026-01-11-03-10-28.jpg')
+PLAN_IMAGE_URL = os.getenv('PLAN_IMAGE_URL', 'https://i.ibb.co/hxPHLpz3/photo-2026-01-18-08-07-41.jpg')
 
 # ===================== Payment Config =====================
 # Manual UPI payment (no crypto)
 UPI_PAYMENT = {
-    'qr_image_url': os.getenv('UPI_QR_IMAGE_URL', 'https://i.postimg.cc/qMpTFSm0/upi.jpg'),
-    'upi_id': os.getenv('UPI_ID', 'shouryagupta0076@oksbi'),
-    'payee_name': os.getenv('UPI_PAYEE_NAME', 'Shourya Gupta'),
+    'qr_image_url': os.getenv('UPI_QR_IMAGE_URL', 'https://i.ibb.co/BV54Rv0v/photo-2026-01-18-08-09-43.jpg'),
+    'upi_id': os.getenv('UPI_ID', 'ayazahmedmd@fam'),
+    'payee_name': os.getenv('UPI_PAYEE_NAME', 'MOHAMMED AYAZ AHMED'),
 }
 
 ADMIN_SETTINGS = {
@@ -194,3 +194,4 @@ if proxy_env:
                 'password': parts[4] if len(parts) > 4 else None
             }
             PROXIES.append(proxy)
+
