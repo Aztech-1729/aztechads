@@ -122,64 +122,53 @@ for _name in ('main_bot', 'logger_bot'):
 main_bot = TelegramClient(os.path.join(SESSION_DIR, 'main_bot'), CONFIG['api_id'], CONFIG['api_hash'])
 logger_bot = TelegramClient(os.path.join(SESSION_DIR, 'logger_bot'), CONFIG['api_id'], CONFIG['api_hash'])
 
-# ===================== Custom Font Styling (font.txt) =====================
-# font.txt contains sample text using Unicode "Mathematical Monospace" letters/digits.
-# We apply the same style to all outgoing captions/messages and inline button labels.
+# ===================== Global Text Styling =====================
+# Telegram doesn't allow changing the app UI font, but we can stylize outgoing
+# text using Unicode "small caps-ish" letters and make HTML messages bold.
+# This is applied to all outgoing captions/messages and inline button labels.
 
-def _load_font_sample() -> str:
-    try:
-        with open('font.txt', 'r', encoding='utf-8') as f:
-            return f.read()
-    except Exception:
-        return ""
+# Small-caps-ish mapping (not all letters exist in Unicode; fallback keeps original)
+_SMALLCAPS_MAP = {
+    'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ꜰ', 'g': 'ɢ', 'h': 'ʜ',
+    'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ', 'o': 'ᴏ', 'p': 'ᴘ',
+    'q': 'ꞯ', 'r': 'ʀ', 's': 'ꜱ', 't': 'ᴛ', 'u': 'ᴜ', 'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x',
+    'y': 'ʏ', 'z': 'ᴢ',
+}
+_SMALLCAPS_REVERSE_MAP = {v: k for k, v in _SMALLCAPS_MAP.items()}
 
-_FONT_SAMPLE = _load_font_sample()
 
-# Unicode Mathematical Monospace ranges
-# A-Z: U+1D670..U+1D689
-# a-z: U+1D68A..U+1D6A3
-# 0-9: U+1D7F6..U+1D7FF
-
-def _to_monospace_char(ch: str) -> str:
-    o = ord(ch)
-    if 0x41 <= o <= 0x5A:  # A-Z
-        return chr(0x1D670 + (o - 0x41))
-    if 0x61 <= o <= 0x7A:  # a-z
-        return chr(0x1D68A + (o - 0x61))
-    if 0x30 <= o <= 0x39:  # 0-9
-        return chr(0x1D7F6 + (o - 0x30))
+def _to_smallcaps_char(ch: str) -> str:
+    # Only stylize latin letters; keep everything else (emojis, punctuation, RTL, etc.)
+    lower = ch.lower()
+    if lower in _SMALLCAPS_MAP and ch.isalpha():
+        return _SMALLCAPS_MAP[lower]
     return ch
 
 
-def _from_monospace_char(ch: str) -> str:
-    """Reverse mapping for Unicode Mathematical Monospace letters/digits."""
-    o = ord(ch)
-    if 0x1D670 <= o <= 0x1D689:  # A-Z
-        return chr(0x41 + (o - 0x1D670))
-    if 0x1D68A <= o <= 0x1D6A3:  # a-z
-        return chr(0x61 + (o - 0x1D68A))
-    if 0x1D7F6 <= o <= 0x1D7FF:  # 0-9
-        return chr(0x30 + (o - 0x1D7F6))
+def _from_smallcaps_char(ch: str) -> str:
+    """Reverse mapping so HTML tag names aren't corrupted if already stylized."""
+    if ch in _SMALLCAPS_REVERSE_MAP:
+        return _SMALLCAPS_REVERSE_MAP[ch]
     return ch
 
 
 def _normalize_html_tag(tag_text: str) -> str:
-    """Normalize a single <...> tag by converting any monospace letters back to ASCII."""
-    # Example: "<𝚋𝚕𝚘𝚌𝚔𝚚𝚞𝚘𝚝𝚎>" -> "<blockquote>"
-    return ''.join(_from_monospace_char(c) for c in tag_text)
+    """Normalize a single <...> tag by converting any small-caps letters back to ASCII."""
+    return ''.join(_from_smallcaps_char(c) for c in tag_text)
 
 
 def _stylize_plain(text: str) -> str:
     if not text:
         return text
-    # Only transform basic latin letters/digits. Keep emojis, punctuation, RTL, etc.
-    return ''.join(_to_monospace_char(c) for c in str(text))
+    return ''.join(_to_smallcaps_char(c) for c in str(text))
 
 
 def _stylize_html(html: str) -> str:
     """Stylize text while preserving HTML tags/entities and leaving <code>/<pre> blocks untouched.
 
-    Also normalizes tag names that may already be in monospace (e.g. <𝚋> -> <b>).
+    - Converts plain text to small-caps-ish Unicode
+    - Normalizes tag names if they were previously stylized
+    - Wraps the final output in <b>...</b> to give a consistent bold look
     """
     if not html:
         return html
@@ -194,27 +183,21 @@ def _stylize_html(html: str) -> str:
     while i < len(s):
         ch = s[i]
 
-        # Capture full HTML tag and normalize it (important if tag letters were stylized)
+        # Capture full HTML tag and normalize it
         if ch == '<':
             j = s.find('>', i + 1)
             if j == -1:
-                # malformed tag; treat as plain text
-                out.append(_to_monospace_char(ch) if not in_code else ch)
+                out.append(_to_smallcaps_char(ch) if not in_code else ch)
                 i += 1
                 continue
 
             tag = s[i:j + 1]
             norm_tag = _normalize_html_tag(tag)
 
-            # Track <code>/<pre> blocks based on normalized tag
             lower = norm_tag.lower()
-            if lower.startswith('<code'):
+            if lower.startswith('<code') or lower.startswith('<pre'):
                 in_code = True
-            elif lower.startswith('</code'):
-                in_code = False
-            elif lower.startswith('<pre'):
-                in_code = True
-            elif lower.startswith('</pre'):
+            elif lower.startswith('</code') or lower.startswith('</pre'):
                 in_code = False
 
             out.append(norm_tag)
@@ -235,11 +218,13 @@ def _stylize_html(html: str) -> str:
             i += 1
             continue
 
-        # Stylize only when not inside <code>/<pre>
-        out.append(_to_monospace_char(ch) if not in_code else ch)
+        out.append(_to_smallcaps_char(ch) if not in_code else ch)
         i += 1
 
-    return ''.join(out)
+    styled = ''.join(out)
+
+    # Make everything bold consistently (Telegram HTML). Safe even if nested.
+    return f"<b>{styled}</b>"
 
 
 def _stylize_buttons(buttons):
@@ -348,6 +333,9 @@ last_replied = {}
 
 # Auto group-join cancellation flags (uid -> bool)
 auto_join_cancel = {}
+
+# Per-user forwarding loop (so all accounts send in parallel, then round delay once)
+user_forwarding_tasks = {}  # user_id -> asyncio.Task
 
 # Payment tracking (gateway.py integration)
 # (Removed) gateway payment tracking (manual UPI now)
@@ -469,8 +457,11 @@ def get_user(user_id):
             'tier': 'free',
             'max_accounts': FREE_TIER['max_accounts'],
             'approved': False,
-            # Premium-only feature toggle (UI in Auto Reply menu)
-            'autoreply_enabled': True,
+            'autoreply_enabled': False,  # Default OFF
+            'interval_preset': 'fast',  # Default: Risky (10s/120s)
+            'forwarding_mode': 'auto',  # Default: Auto Groups Only
+            'ads_mode': 'saved',
+            'smart_rotation': False,
             'created_at': datetime.now()
         }
         users_col.insert_one(user)
@@ -566,10 +557,10 @@ def get_account_settings(account_id):
     if not settings:
         settings = {
             'account_id': account_id,
-            'group_delay': FREE_TIER['group_delay'],
+            # group_delay deprecated (no longer used)
             'msg_delay': FREE_TIER['msg_delay'],
             'round_delay': FREE_TIER['round_delay'],
-            'logs_chat_id': None
+            'logs_chat_id': None,
         }
         account_settings_col.insert_one(settings)
     return settings
@@ -719,6 +710,15 @@ async def safe_leave_chat(client, target):
         return False
 
 
+def _is_auto_leave_enabled(user_id: int) -> bool:
+    """User-level toggle for whether bot should auto-leave groups on permanent send failures."""
+    try:
+        doc = get_user(int(user_id))
+        return bool(doc.get('auto_leave_groups', True))
+    except Exception:
+        return True
+
+
 def remove_group_from_db(account_id, target_type, group_key, data=None):
     """Remove a group/topic target permanently from DB for this account."""
     try:
@@ -770,27 +770,38 @@ async def notify_auto_left(account_id, phone, group_name, group_key, reason=None
         pass
 
 
-async def send_log(account_id, message, view_link=None, group_name=None):
-    """Send logs via logger bot with View Message button."""
+async def _get_user_logs_chat_id_for_account(account_id):
+    """Logs are configured once per USER and apply to all their accounts."""
     try:
-        acc_id_str = str(account_id)
-        settings = get_account_settings(acc_id_str)
-        chat_id = settings.get('logs_chat_id')
+        acc = accounts_col.find_one({'_id': account_id}, {'owner_id': 1})
+        if not acc:
+            return None
+        owner_id = acc.get('owner_id')
+        if not owner_id:
+            return None
+        user_doc = users_col.find_one({'user_id': int(owner_id)}, {'logs_chat_id': 1})
+        if not user_doc:
+            return None
+        return user_doc.get('logs_chat_id')
+    except Exception:
+        return None
 
+
+async def send_log(account_id, message, view_link=None, group_name=None):
+    """Send logs via logger bot (user-level)."""
+    try:
+        chat_id = await _get_user_logs_chat_id_for_account(account_id)
         if not chat_id:
             return
-        
-        # Use logger bot for sending logs
+
         if not CONFIG.get('logger_bot_token'):
             return
 
         if view_link and group_name:
             buttons = [[Button.url("View Message", view_link)]]
-            # Use HTML consistently in logger channel
-            full_msg = f"<b>Sent to { _h(group_name) }</b>"
+            full_msg = f"<b>Sent to {_h(group_name)}</b>"
             await logger_bot.send_message(int(chat_id), full_msg, buttons=buttons, parse_mode='html')
         elif message:
-            # Handle if message is accidentally a Message object instead of string
             msg_text = str(message) if not isinstance(message, str) else message
             await logger_bot.send_message(int(chat_id), msg_text, parse_mode='html')
     except Exception as e:
@@ -876,7 +887,7 @@ async def run_forwarding_loop(user_id, account_id):
                 tier_settings = get_user_tier_settings(user_id)
                 fwd_mode = user.get('forwarding_mode', 'topics')
                 
-                group_delay = tier_settings.get('group_delay', 120)
+                # group_delay removed: use msg_delay between each send and a round_delay after full cycle
                 msg_delay = tier_settings.get('msg_delay', 45)
                 round_delay = tier_settings.get('round_delay', 7200)
                 
@@ -1147,16 +1158,19 @@ async def run_forwarding_loop(user_id, account_id):
                         mark_group_failed(account_id, group_key, str(e))
                         print(f"[FORWARDING] Permanent fail {group['title']}: {type(e).__name__}")
 
-                        # Auto-leave the group if sending fails
-                        try:
-                            if current_entity is not None:
-                                left_ok = await safe_leave_chat(client, current_entity)
-                                if left_ok:
-                                    remove_group_from_db(acc_id_str, group.get('type'), group_key, group)
-                                    await notify_auto_left(account_id, acc.get('phone'), group.get('title'), group_key, reason=type(e).__name__)
-                                await add_user_log(user_id, f"Auto-left {group['title'][:20]} after failure")
-                        except Exception as le:
-                            print(f"[FORWARDING] Leave failed: {str(le)[:80]}")
+                        # Auto-leave the group if sending fails (only if enabled)
+                        if _is_auto_leave_enabled(user_id):
+                            try:
+                                if current_entity is not None:
+                                    left_ok = await safe_leave_chat(client, current_entity)
+                                    if left_ok:
+                                        remove_group_from_db(acc_id_str, group.get('type'), group_key, group)
+                                        await notify_auto_left(account_id, acc.get('phone'), group.get('title'), group_key, reason=type(e).__name__)
+                                    await add_user_log(user_id, f"Auto-left {group['title'][:20]} after failure")
+                            except Exception as le:
+                                print(f"[FORWARDING] Leave failed: {str(le)[:80]}")
+                        else:
+                            await add_user_log(user_id, f"Auto-leave disabled; kept {group['title'][:20]}")
                         
                     except Exception as e:
                         failed += 1
@@ -1168,24 +1182,24 @@ async def run_forwarding_loop(user_id, account_id):
                         else:
                             print(f"[FORWARDING] Error {group['title']}: {error_str[:50]}")
 
-                            # Auto-leave on any non-flood send failure
-                            try:
-                                if current_entity is not None:
-                                    left_ok = await safe_leave_chat(client, current_entity)
-                                    if left_ok:
-                                        remove_group_from_db(acc_id_str, group.get('type'), group_key, group)
-                                        await notify_auto_left(account_id, acc.get('phone'), group.get('title'), group_key, reason=error_str[:120])
-                                    await add_user_log(user_id, f"Auto-left {group['title'][:20]} after failure")
-                            except Exception as le:
-                                print(f"[FORWARDING] Leave failed: {str(le)[:80]}")
+                            # Auto-leave on any non-flood send failure (only if enabled)
+                            if _is_auto_leave_enabled(user_id):
+                                try:
+                                    if current_entity is not None:
+                                        left_ok = await safe_leave_chat(client, current_entity)
+                                        if left_ok:
+                                            remove_group_from_db(acc_id_str, group.get('type'), group_key, group)
+                                            await notify_auto_left(account_id, acc.get('phone'), group.get('title'), group_key, reason=error_str[:120])
+                                        await add_user_log(user_id, f"Auto-left {group['title'][:20]} after failure")
+                                except Exception as le:
+                                    print(f"[FORWARDING] Leave failed: {str(le)[:80]}")
+                            else:
+                                await add_user_log(user_id, f"Auto-leave disabled; kept {group['title'][:20]}")
 
                         # Update stats in correct collection
                         update_account_stats(str(account_id), failed=1)
                     
                     await asyncio.sleep(msg_delay)
-                    
-                    if (i + 1) % 10 == 0:
-                        await asyncio.sleep(group_delay)
                 
                 print(f"[FORWARDING] Round complete. Sent: {sent}, Failed: {failed}, Skipped: {skipped}")
                 try:
@@ -1194,8 +1208,19 @@ async def run_forwarding_loop(user_id, account_id):
                     pass
                 await add_user_log(user_id, f"Round: {sent} sent, {failed} failed, {skipped} skipped")
                 
+                # Check if still forwarding before waiting for next round
+                if not acc.get('is_forwarding', False):
+                    print(f"[{account_id}] Stopped before round delay")
+                    break
+                
                 print(f"[FORWARDING] Waiting {round_delay}s for next round...")
-                await asyncio.sleep(round_delay)
+                for _ in range(round_delay):
+                    # Check every second if forwarding was stopped
+                    acc = get_account_by_id(account_id)
+                    if not acc or not acc.get('is_forwarding', False):
+                        print(f"[{account_id}] Stopped during round delay")
+                        break
+                    await asyncio.sleep(1)
                 
             except asyncio.CancelledError:
                 print(f"[FORWARDING] Task cancelled for account {account_id}")
@@ -1246,6 +1271,56 @@ def build_message_link(entity, msg_id, topic_id=None):
     if topic_id:
         return f"{base}/{topic_id}/{msg_id}" if msg_id else f"{base}/{topic_id}"
     return f"{base}/{msg_id}" if msg_id else base
+
+async def refresh_account_groups(client, account_id):
+    """Refresh groups for an account and return count of groups found."""
+    try:
+        dialogs = await client.get_dialogs(limit=None)
+        groups = []
+        for d in dialogs:
+            e = d.entity
+            if isinstance(e, User):
+                continue
+            if not isinstance(e, (Channel, Chat)):
+                continue
+            if isinstance(e, Channel) and e.broadcast:
+                continue
+            title = getattr(e, 'title', 'Unknown')
+            if title and title != 'Unknown':
+                group_id = e.id
+                access_hash = getattr(e, 'access_hash', None)
+                username = getattr(e, 'username', None)
+                is_channel = isinstance(e, Channel)
+                
+                if access_hash is None and is_channel:
+                    try:
+                        full_entity = await client.get_entity(e)
+                        access_hash = getattr(full_entity, 'access_hash', None)
+                    except:
+                        pass
+                
+                groups.append({
+                    'account_id': str(account_id),
+                    'group_id': group_id,
+                    'title': title,
+                    'access_hash': access_hash,
+                    'username': username,
+                    'is_channel': is_channel
+                })
+        
+        # Save to database (update or insert)
+        for g in groups:
+            account_auto_groups_col.update_one(
+                {'account_id': str(account_id), 'group_id': g['group_id']},
+                {'$set': g},
+                upsert=True
+            )
+        
+        return len(groups)
+    except Exception as e:
+        print(f"[refresh_account_groups] Error: {e}")
+        return 0
+
 
 async def fetch_groups(client, account_id, phone):
     try:
@@ -1335,9 +1410,9 @@ def render_plan_select_text() -> str:
 
 def render_welcome_text() -> str:
     return (
-        "🚀 Welcome to Kabru Ads Bot\n\n"
+        "🚀 Welcome to AztechAds Bot\n\n"
         "Automate your Telegram advertising campaigns across multiple groups.\n\n"
-        "Get started: Tap Kabru Ads Now to choose a plan and add your first account."
+        "Get started: Tap AztechAds Now to choose a plan and add your first account."
     )
 
 
@@ -1397,9 +1472,9 @@ def render_dashboard_text(uid: int) -> str:
 # ===================== Keyboards =====================
 
 def new_welcome_keyboard():
-    """New welcome screen with single Kabru Ads Now button."""
+    """New welcome screen with single AztechAds Now button."""
     return [
-        [Button.inline("Kabru Ads Now", b"adsye_now")],
+        [Button.inline("AztechAds Now", b"adsye_now")],
         [Button.url("Support", MESSAGES['support_link']), Button.url("Updates", MESSAGES['updates_link'])]
     ]
 
@@ -1510,7 +1585,7 @@ def account_list_keyboard(user_id, page=0):
     return buttons
 
 def settings_menu_keyboard(uid):
-    """Settings menu with Auto Reply, Topics, Logs, Smart Rotation, Auto Group Join."""
+    """Settings menu with Auto Reply, Topics, Logs, Smart Rotation, Auto Group Join, Refresh All Groups, Auto Leave."""
     # Use Unicode escape sequences to avoid any editor/encoding corruption
     buttons = [
         [Button.inline("\U0001F4AC Auto Reply", b"menu_autoreply")],  # 💬
@@ -1519,10 +1594,22 @@ def settings_menu_keyboard(uid):
         [Button.inline("\U0001F4E3 Ads Mode", b"menu_ads_mode")],     # 📣
     ]
     
-    # Premium-only features
+    # Premium-only features (show locked for free users)
     if is_premium(uid):
         buttons.append([Button.inline("\U0001F504 Smart Rotation", b"menu_smart_rotation")])  # 🔄
         buttons.append([Button.inline("\U0001F465 Auto Group Join", b"menu_auto_group_join")])  # 👥
+    else:
+        buttons.append([Button.inline("\U0001F504 Smart Rotation 🔒", b"locked_smart_rotation")])
+        buttons.append([Button.inline("\U0001F465 Auto Group Join 🔒", b"locked_auto_group_join")])
+    
+    # Refresh All Groups - FREE for everyone
+    buttons.append([Button.inline("🔄 Refresh All Groups", b"refresh_all_groups")])
+    
+    # Auto Leave Failed Groups toggle
+    user_doc = get_user(uid)
+    auto_leave_enabled = user_doc.get('auto_leave_groups', True)
+    leave_status = "✅ ON" if auto_leave_enabled else "❌ OFF"
+    buttons.append([Button.inline(f"Auto Leave Failed: {leave_status}", b"toggle_auto_leave")])
     
     buttons.append([Button.inline("\u2190 Back", b"enter_dashboard")])  # ←
     return buttons
@@ -1533,16 +1620,18 @@ def interval_menu_keyboard(user_id):
     def mark_for(key: str) -> str:
         return " ✓" if key == current else ""
 
-    # Keep 2 buttons per row: Slow/Medium + Fast/Custom
+    # All plans can use slow, medium, fast (risky) presets
     slow = Button.inline(f"{INTERVAL_PRESETS['slow']['name']}{mark_for('slow')}", b"interval_slow")
     medium = Button.inline(f"{INTERVAL_PRESETS['medium']['name']}{mark_for('medium')}", b"interval_medium")
     fast = Button.inline(f"{INTERVAL_PRESETS['fast']['name']}{mark_for('fast')}", b"interval_fast")
 
+    # Custom intervals are premium-only (Grow, Prime, Dominion plans)
     if is_premium(user_id):
         custom_mark = " ✓" if current == 'custom' else ""
         custom = Button.inline(f"Custom Settings{custom_mark}", b"interval_custom")
     else:
-        custom = Button.inline("Custom (Premium Only)", b"interval_upgrade")
+        # Free plan: show button but mark as locked
+        custom = Button.inline("Custom Settings 🔒", b"interval_locked")
 
     return [
         [slow, medium],
@@ -1650,10 +1739,12 @@ def admin_panel_keyboard():
     # Layout requested:
     # Row 1: All Users | Premium Users
     # Row 2: Full Stats | Grant Premium
-    # Row 3: Back
+    # Row 3: Admins
+    # Row 4: Back
     return [
         [Button.inline("All Users", b"admin_all_users"), Button.inline("Premium Users", b"admin_premium")],
         [Button.inline("Full Stats", b"admin_users"), Button.inline("Grant Premium", b"admin_grant_premium")],
+        [Button.inline("👨‍💼 Admins", b"admin_admins")],
         [Button.inline("Back", b"enter_dashboard")]
     ]
 
@@ -1661,19 +1752,14 @@ def account_menu_keyboard(account_id, acc, user_id):
     fwd = acc.get('is_forwarding', False)
     btn = "Stop" if fwd else "Start"
     data = f"stop_{account_id}" if fwd else f"fwd_select_{account_id}"
-    
-    tier_settings = get_user_tier_settings(user_id)
+
+    # Settings and Refresh Groups removed per user request
     buttons = [
-        [Button.inline("Topics", f"topics_{account_id}"), Button.inline("Settings", f"settings_{account_id}")],
-        [Button.inline("Stats", f"stats_{account_id}"), Button.inline("Refresh Groups", f"refresh_{account_id}")],
+        [Button.inline("Topics", f"topics_{account_id}"), Button.inline("Stats", f"stats_{account_id}")],
         [Button.inline(btn, data)],
-        [Button.inline("Delete", f"delete_{account_id}")]
+        [Button.inline("Delete", f"delete_{account_id}")],
+        [Button.inline("Back", b"enter_dashboard")],
     ]
-    
-    if tier_settings.get('logs_enabled'):
-        buttons.insert(3, [Button.inline("Logs", f"logs_{account_id}")])
-    
-    buttons.append([Button.inline("Back", b"tier_free")])
     return buttons
 
 def topics_menu_keyboard(account_id, user_id):
@@ -1710,17 +1796,11 @@ def forwarding_select_keyboard(account_id, user_id):
     return buttons
 
 def settings_keyboard(account_id, user_id):
-    tier_settings = get_user_tier_settings(user_id)
+    # Auto-reply button removed per user request
     buttons = [
-        [Button.inline("Msg Delay", f"setmsg_{account_id}"), Button.inline("Group Delay", f"setgrp_{account_id}")],
-        [Button.inline("Round Delay", f"setround_{account_id}")],
-        [Button.inline("Clear Failed", f"clearfailed_{account_id}")]
+        [Button.inline("Clear Failed", f"clearfailed_{account_id}")],
+        [Button.inline("Back", f"acc_{account_id}")]
     ]
-    
-    if tier_settings.get('auto_reply_enabled'):
-        buttons.insert(2, [Button.inline("Auto-Reply", f"setreply_{account_id}")])
-    
-    buttons.append([Button.inline("Back", f"acc_{account_id}")])
     return buttons
 
 def otp_keyboard():
@@ -1793,85 +1873,9 @@ async def cmd_access(event):
     else:
         await event.respond("Wrong password!")
 
-@main_bot.on(events.NewMessage(pattern=r'^/admin(?:@[\w_]+)?(?:\s|$)'))
-async def cmd_admin_panel(event):
-    """Admin: Show Kabru Ads-style admin panel."""
-    uid = event.sender_id
-    if not is_admin(uid):
-        return
-    
-    # Get stats
-    total_users = users_col.count_documents({})
-    premium_users = users_col.count_documents({'tier': 'premium'})
-    total_accounts = accounts_col.count_documents({})
-    active_accounts = accounts_col.count_documents({'is_forwarding': True})
-    total_admins = admins_col.count_documents({}) + 1
-    
-    # Today's new users
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    new_today = users_col.count_documents({'created_at': {'$gte': today_start}}) if users_col.find_one({}, {'created_at': 1}) else 0
-    
-    # Current time
-    now = datetime.now().strftime("%d/%m/%y • %I:%M %p")
-    
-    text = (
-        f"<b>✦ KABRU ADS ADMIN CONTROL CENTER</b>\n\n"
-        f"<code>Time: {now}</code>\n\n"
-        f"<b>[stats]</b> QUICK STATS:\n"
-        f"<code>├ Users: {total_users} | Premium: {premium_users}\n"
-        f"├ Accounts: {total_accounts} | Active: {active_accounts}\n"
-        f"└ Admins: {total_admins} | New Today: {new_today}</code>\n\n"
-        f"<i>Select a section below to manage</i>"
-    )
-    
-    buttons = [
-        [Button.inline("👥 Users", b"admin_users"), Button.inline("👑 Admins", b"admin_admins")],
-        [Button.inline("📊 Stats", b"admin_stats"), Button.inline("🔧 Controls", b"admin_controls")],
-        [Button.inline("← Back", b"back_start")]
-    ]
-    
-    await event.respond(text, parse_mode='html', buttons=buttons)
+# /admin command removed per user request (use admin panel button from dashboard)
 
-@main_bot.on(events.NewMessage(pattern=r'^/help(?:@[\w_]+)?(?:\s|$)'))
-async def cmd_help(event):
-    uid = event.sender_id
-
-    if not await enforce_forcejoin_or_prompt(event):
-        return
-
-    text = (
-        "<b>⚡ KABRU ADS BOT COMMANDS</b>\n\n"
-        "<b>🎯 User Commands:</b>\n"
-        "<code>/start</code> — Start the bot\n"
-        "<code>/add</code> — Quick add account\n"
-        "<code>/go</code> or <code>/run</code> — Instantly start ads\n"
-        "<code>/stop</code> — Instantly stop ads\n"
-        "<code>/status</code> — View broadcast status\n"
-        "<code>/me</code> — View your profile\n"
-        "<code>/help</code> — Show this help menu\n\n"
-        "<b>💡 Quick Tips:</b>\n"
-        "<code>• Use /add to quickly add accounts\n"
-        "• Use /go to start broadcasting\n"
-        "• Use /stop to halt all broadcasts</code>\n"
-    )
-    
-    if is_admin(uid):
-        text += (
-            "\n<b>⚙️ Admin Commands:</b>\n"
-            "<code>/admin</code> — Admin panel\n"
-            "<code>/addadmin {id}</code> — Add new admin\n"
-            "<code>/rmadmin {id}</code> — Remove admin\n"
-            "<code>/finduser {id}</code> — View user details\n"
-            "<code>/ping</code> — VPS stats\n"
-            "<code>/stats</code> — Admin bot stats\n"
-            "<code>/bd</code> — Broadcast to all users\n"
-        )
-    
-    buttons = [
-        [Button.url("📞 Support", MESSAGES['support_link']), Button.url("📢 Updates", MESSAGES['updates_link'])]
-    ]
-    
-    await event.respond(text, parse_mode='html', buttons=buttons)
+# /help command removed per user request
 
 @main_bot.on(events.NewMessage(pattern=r'^/rmprm(?:@[\w_]+)?\s+(\d+)$'))
 async def cmd_rmprm(event):
@@ -1922,40 +1926,7 @@ async def cmd_clearusers(event):
     
     await event.respond(f"Cleared {result.deleted_count} users!")
 
-@main_bot.on(events.NewMessage(pattern=r'^/ping(?:@[\w_]+)?(?:\s|$)'))
-async def cmd_ping(event):
-    """Admin: Show Kabru Ads-style system stats."""
-    uid = event.sender_id
-    if not is_admin(uid):
-        return
-    
-    import platform
-    cpu = psutil.cpu_percent(interval=1)
-    ram = psutil.virtual_memory()
-    disk = psutil.disk_usage('/')
-    uptime_sec = int((datetime.now() - datetime.fromtimestamp(psutil.boot_time())).total_seconds())
-    uptime_str = f"{uptime_sec//3600:02d}:{(uptime_sec%3600)//60:02d}:{uptime_sec%60:02d}"
-    
-    # Bot stats
-    total_users = users_col.count_documents({})
-    active_accounts = accounts_col.count_documents({'is_forwarding': True})
-    total_accounts = accounts_col.count_documents({})
-    
-    text = (
-        f"<b>PONG! — BOT STATUS</b>\n\n"
-        f"<code> System: {platform.system()} {platform.release()}\n"
-        f" Uptime: {uptime_str}\n\n"
-        f" CPU Usage: {cpu}%\n"
-        f" RAM: {ram.percent}% ({ram.used//(1024**3)}GB / {ram.total//(1024**3)}GB)\n"
-        f" Disk: {disk.percent}% ({disk.used//(1024**3)}GB / {disk.total//(1024**3)}GB)</code>\n\n"
-        f"<b>[stats]</b> Bot Stats:\n"
-        f"<code>• Active Broadcasts: {active_accounts}\n"
-        f"• Total Users: {total_users}\n"
-        f"• Active Accounts: {total_accounts}</code>\n\n"
-        f"<i>Bot is running smoothly!</i> <b>[OK]</b>"
-    )
-    
-    await event.respond(text, parse_mode='html')
+# /ping command removed per user request
 
 @main_bot.on(events.NewMessage(pattern=r'^/reboot(?:@[\w_]+)?(?:\s|$)'))
 async def cmd_reboot(event):
@@ -2022,217 +1993,10 @@ async def cmd_rmadmin(event):
     else:
         await event.respond(f"`{target_uid}` is not an admin!")
 
-@main_bot.on(events.NewMessage(pattern=r'^/go(?:@[\w_]+)?(?:\s|$)'))
-async def cmd_go(event):
-    """User: Start all ads forwarding."""
-    uid = event.sender_id
-    
-    if not await enforce_forcejoin_or_prompt(event):
-        return
-    
-    accounts = get_user_accounts(uid)
-    if not accounts:
-        await event.respond("No accounts added! Use /start to add accounts.")
-        return
-    
-    # Update all added accounts profile (last name + bio) when starting ads
-    try:
-        await apply_account_profile_templates(uid)
-    except Exception:
-        pass
-
-    # Start forwarding for all accounts (with group check)
-    user = get_user(uid)
-    fwd_mode = user.get('forwarding_mode', 'both')  # Default to 'both' to check all sources
-    
-    started = 0
-    skipped = 0
-    
-    for acc in accounts:
-        acc_id = str(acc['_id'])
-        
-        if not acc.get('is_forwarding'):
-            # Check if account has groups (topics OR auto groups)
-            has_groups = False
-            
-            # Always check both sources regardless of mode
-            topic_count = account_topics_col.count_documents({'account_id': acc_id})
-            auto_count = account_auto_groups_col.count_documents({'account_id': acc_id})
-            
-            has_groups = (topic_count > 0) or (auto_count > 0)
-            
-            if has_groups:
-                accounts_col.update_one({'_id': acc['_id']}, {'$set': {'is_forwarding': True}})
-                
-                if acc['_id'] not in forwarding_tasks or forwarding_tasks[acc['_id']].done():
-                    task = asyncio.create_task(run_forwarding_loop(uid, acc['_id']))
-                    forwarding_tasks[acc['_id']] = task
-                
-                started += 1
-            else:
-                skipped += 1
-    
-    if started == 0:
-        await event.respond(
-            "⚠️ No accounts with groups found!\n\n"
-            f"Total accounts: {len(accounts)}\n"
-            f"Accounts without groups: {skipped}\n\n"
-            "Add groups in Dashboard → Topics or enable auto-fetch."
-        )
-    else:
-        msg = f"▶️ Started {started} account(s)!"
-        if skipped > 0:
-            msg += f"\n\n⏭️ Skipped {skipped} account(s) without groups."
-        await event.respond(msg)
+# /go command removed per user request (use Start button from dashboard)
 
 
-@main_bot.on(events.NewMessage(pattern=r'^/run(?:@[\w_]+)?(?:\s|$)'))
-async def cmd_run(event):
-    """User: Alias for /go."""
-    await cmd_go(event)
-
-
-@main_bot.on(events.NewMessage(pattern=r'^/status(?:@[\w_]+)?(?:\s|$)'))
-async def cmd_status(event):
-    """User: Show broadcast status + account summary."""
-    uid = event.sender_id
-
-    if not await enforce_forcejoin_or_prompt(event):
-        return
-
-    user = get_user(uid)
-    accounts = get_user_accounts(uid)
-    total = len(accounts)
-    active = sum(1 for a in accounts if a.get('is_forwarding'))
-
-    mode = user.get('forwarding_mode', 'topics')
-    preset = user.get('interval_preset', 'medium')
-
-    text = (
-        f"<b>📡 Status</b>\n\n"
-        f"<b>Accounts:</b> {active}/{total} active\n"
-        f"<b>Mode:</b> <code>{mode}</code>\n"
-        f"<b>Intervals:</b> <code>{preset}</code>\n"
-    )
-
-    if total == 0:
-        text += "\n<i>No accounts added yet. Use /start or /add.</i>"
-
-    await event.respond(text, parse_mode='html')
-
-
-@main_bot.on(events.NewMessage(pattern=r'^/me(?:@[\w_]+)?(?:\s|$)'))
-async def cmd_me(event):
-    """User: Show your profile/tier/settings summary."""
-    uid = event.sender_id
-
-    if not await enforce_forcejoin_or_prompt(event):
-        return
-
-    user = get_user(uid)
-    tier = 'Admin' if is_admin(uid) else ('Premium' if is_premium(uid) else 'Free')
-    max_accounts = get_user_max_accounts(uid)
-
-    accounts = get_user_accounts(uid)
-    total = len(accounts)
-    active = sum(1 for a in accounts if a.get('is_forwarding'))
-
-    mode = user.get('forwarding_mode', 'topics')
-    preset = user.get('interval_preset', 'medium')
-
-    text = (
-        f"<b>👤 Me</b>\n\n"
-        f"<b>ID:</b> <code>{uid}</code>\n"
-        f"<b>Tier:</b> {tier}\n"
-        f"<b>Approved:</b> {('✅' if user.get('approved') else '❌')}\n"
-        f"<b>Accounts:</b> {total}/{max_accounts} (active: {active})\n"
-        f"<b>Mode:</b> <code>{mode}</code>\n"
-        f"<b>Intervals:</b> <code>{preset}</code>\n"
-    )
-
-    await event.respond(text, parse_mode='html')
-
-
-@main_bot.on(events.NewMessage(pattern=r'^/stats(?:@[\w_]+)?(?:\s|$)'))
-async def cmd_stats(event):
-    """Admin only: Basic bot stats."""
-    uid = event.sender_id
-
-    # Admin-only command - don't respond to normal users
-    if not is_admin(uid):
-        return
-
-    total_users = users_col.count_documents({})
-    total_accounts = accounts_col.count_documents({})
-    premium_users = users_col.count_documents({'tier': 'premium'})
-    active_accounts = accounts_col.count_documents({'is_forwarding': True})
-
-    text = (
-        f"<b>📊 Bot Stats</b>\n\n"
-        f"<b>Users:</b> {total_users}\n"
-        f"<b>Premium Users:</b> {premium_users}\n"
-        f"<b>Total Accounts:</b> {total_accounts}\n"
-        f"<b>Active Accounts:</b> {active_accounts}\n"
-    )
-
-    await event.respond(text, parse_mode='html')
-
-
-@main_bot.on(events.NewMessage(pattern=r'^/finduser(?:@[\w_]+)?\s+(\d+)$'))
-async def cmd_finduser(event):
-    """Admin: Lookup a user by ID."""
-    uid = event.sender_id
-    if not is_admin(uid):
-        return
-
-    target = int(event.pattern_match.group(1))
-    user = users_col.find_one({'user_id': target})
-
-    if not user:
-        await event.respond(f"User <code>{target}</code> not found.", parse_mode='html')
-        return
-
-    accounts = list(accounts_col.find({'owner_id': target}))
-    total = len(accounts)
-    active = sum(1 for a in accounts if a.get('is_forwarding'))
-
-    tier = user.get('tier', 'free')
-    max_acc = user.get('max_accounts', FREE_TIER.get('max_accounts', 1))
-    approved = user.get('approved', False)
-
-    created_at = user.get('created_at')
-    created_str = created_at.strftime('%Y-%m-%d %H:%M') if hasattr(created_at, 'strftime') else str(created_at)
-
-    text = (
-        f"<b>🔎 User</b>\n\n"
-        f"<b>ID:</b> <code>{target}</code>\n"
-        f"<b>Tier:</b> <code>{tier}</code>\n"
-        f"<b>Approved:</b> {('✅' if approved else '❌')}\n"
-        f"<b>Max Accounts:</b> {max_acc}\n"
-        f"<b>Accounts:</b> {active}/{total} active\n"
-        f"<b>Created:</b> <code>{created_str}</code>\n"
-    )
-
-    await event.respond(text, parse_mode='html')
-
-
-@main_bot.on(events.NewMessage(pattern=r'^/stop(?:@[\w_]+)?(?:\s|$)'))
-async def cmd_stop(event):
-    """User: Stop all ads forwarding."""
-    uid = event.sender_id
-    
-    if not await enforce_forcejoin_or_prompt(event):
-        return
-    
-    accounts = get_user_accounts(uid)
-    stopped = 0
-    
-    for acc in accounts:
-        if acc.get('is_forwarding'):
-            accounts_col.update_one({'_id': acc['_id']}, {'$set': {'is_forwarding': False}})
-            stopped += 1
-    
-    await event.respond(f"⏹️ Stopped {stopped} accounts!")
+# /run, /status, /me, /stats, /finduser, /stop commands removed per user request
 
 @main_bot.on(events.NewMessage(pattern=r'^/mystats(?:@[\w_]+)?(?:\s|$)'))
 async def cmd_mystats(event):
@@ -2364,28 +2128,7 @@ async def cmd_broadcast(event):
     
     await event.respond(f"Broadcast complete!\nSent: {sent}\nFailed: {failed}")
 
-@main_bot.on(events.NewMessage(pattern=r'^/add(?:@[\w_]+)?(?:\s|$)'))
-async def cmd_add(event):
-    uid = event.sender_id
-
-    if not await enforce_forcejoin_or_prompt(event):
-        return
-
-    if not is_approved(uid):
-        approve_user(uid)
-    
-    accounts = get_user_accounts(uid)
-    max_accounts = get_user_max_accounts(uid)
-    
-    if len(accounts) >= max_accounts:
-        if is_premium(uid):
-            await event.respond(f"Account limit reached ({max_accounts}). Contact admin for more.")
-        else:
-            await event.respond(f"Free tier limit: {max_accounts} account(s).\nUpgrade to Premium for more!")
-        return
-    
-    user_states[uid] = {'action': 'phone'}
-    await event.respond("Send phone number with country code:\n\nExample: `+919876543210`")
+# /add command removed per user request (use dashboard Add Account button)
 
 @main_bot.on(events.NewMessage(pattern=r'^/list(?:@[\w_]+)?(?:\s|$)'))
 async def cmd_list(event):
@@ -2455,16 +2198,16 @@ async def callback(event):
             return
         
         if data == "accept_privacy":
-            # User accepted privacy policy → Show welcome with Kabru Ads Now
+            # User accepted privacy policy → Show welcome with AztechAds Now
             welcome_text = (
-                "🚀 Welcome to Kabru Ads Bot!\n\n"
+                "🚀 Welcome to AztechAds Bot!\n\n"
                 "Automate your Telegram advertising campaigns across multiple groups.\n\n"
                 "<blockquote><b>Plans Available:</b>\n"
                 "• Scout (Free)\n"
                 "• Grow (₹69)\n"
                 "• Prime (₹199)\n"
                 "• Dominion (₹389)</blockquote>\n\n"
-                "Click <b>Kabru Ads Now</b> to choose your plan!"
+                "Click <b>AztechAds Now</b> to choose your plan!"
             )
             welcome_image = MESSAGES.get('welcome_image', '')
             if welcome_image:
@@ -2474,13 +2217,13 @@ async def callback(event):
                     welcome_image,
                     caption=welcome_text,
                     parse_mode='html',
-                    buttons=[[Button.inline("🚀 Kabru Ads Now", b"adsye_now")]]
+                    buttons=[[Button.inline("🚀 AztechAds Now", b"adsye_now")]]
                 )
             else:
                 await event.edit(
                     welcome_text,
                     parse_mode='html',
-                    buttons=[[Button.inline("🚀 Kabru Ads Now", b"adsye_now")]]
+                    buttons=[[Button.inline("🚀 AztechAds Now", b"adsye_now")]]
                 )
             return
 
@@ -2503,7 +2246,8 @@ async def callback(event):
                 f"👥 <b>Groups per Topic:</b> {plan['max_groups_per_topic']}\n\n"
                 f"⏱️ <b>Delays:</b>\n"
                 f"  • Message: {plan['msg_delay']}s\n"
-                f"  • Group: {plan['group_delay']}s\n"
+                # group_delay removed
+
                 f"  • Round: {plan['round_delay']}s\n\n"
                 f"✨ <b>Features:</b>\n"
                 f"  • Auto Reply: {'Yes' if plan['auto_reply_enabled'] else 'No'}\n"
@@ -2864,15 +2608,6 @@ async def callback(event):
                 await event.edit(text, parse_mode='html', buttons=[[Button.inline("← Back", b"back_admin")]])
                 return
             
-            if data == "admin_admins":
-                admins = list(admins_col.find())
-                text = f"**Admins List**\n\nOwner: `{CONFIG['owner_id']}`\n\n"
-                for a in admins:
-                    text += f"`{a['user_id']}`\n"
-                
-                await event.edit(text, buttons=[[Button.inline("🏠 Back", b"back_admin")]])
-                return
-            
             if data == "admin_stats":
                 # psutil is imported at module level
                 cpu = psutil.cpu_percent(interval=1)
@@ -3176,7 +2911,6 @@ async def callback(event):
                 text = (
                     "⏱️ Interval Settings\n\n"
                     "Current: Custom\n\n"
-                    f"Group Delay: {custom['group_delay']}s\n"
                     f"Message Delay: {custom['msg_delay']}s\n"
                     f"Round Delay: {custom['round_delay']}s"
                 )
@@ -3185,7 +2919,6 @@ async def callback(event):
                 text = (
                     "⏱️ Interval Settings\n\n"
                     f"Current: {preset['name']}\n\n"
-                    f"Group Delay: {preset['group_delay']}s\n"
                     f"Message Delay: {preset['msg_delay']}s\n"
                     f"Round Delay: {preset['round_delay']}s"
                 )
@@ -3193,33 +2926,34 @@ async def callback(event):
             await event.edit(text, buttons=interval_menu_keyboard(uid))
             return
         
-        if data.startswith("interval_") and not data == "interval_upgrade" and not data == "interval_custom":
+        if data.startswith("interval_") and data not in ("interval_locked", "interval_custom"):
+            # Handle preset intervals (slow, medium, fast) - available to all plans
             preset_key = data.replace("interval_", "")
             if preset_key in INTERVAL_PRESETS:
                 users_col.update_one({'user_id': uid}, {'$set': {'interval_preset': preset_key}})
                 preset = INTERVAL_PRESETS[preset_key]
                 await event.answer(f"Interval set to: {preset['name']}", alert=True)
-                
+
                 text = (
                     "⏱️ Interval Settings\n\n"
                     f"Current: {preset['name']}\n\n"
-                    f"Group Delay: {preset['group_delay']}s\n"
                     f"Message Delay: {preset['msg_delay']}s\n"
                     f"Round Delay: {preset['round_delay']}s"
                 )
                 await event.edit(text, buttons=interval_menu_keyboard(uid))
             return
         
-        if data == "interval_upgrade":
-            owner_id = CONFIG['owner_id']
+        if data == "interval_locked":
+            # Free plan users trying to access custom intervals
             text = (
-                "<b>⏱️ Custom Interval</b>\n\n"
-                "<blockquote>This feature is not available for Free tier.</blockquote>\n\n"
-                "<i>Upgrade to Premium to set custom intervals.</i>"
+                "<b>🔒 Premium Feature</b>\n\n"
+                "<blockquote>Custom intervals are available for Premium plans only.\n\n"
+                "Upgrade to Grow, Prime, or Dominion to unlock custom interval settings.</blockquote>\n\n"
+                "<b>Purchase Premium to unlock this feature.</b>"
             )
             await event.edit(text, parse_mode='html', buttons=[
-                [Button.inline("Upgrade to Premium", b"go_premium")],
-                [Button.inline("Back", b"menu_interval")]
+                [Button.inline("💎 View Plans", b"back_plans")],
+                [Button.inline("← Back", b"menu_interval")]
             ])
             return
         
@@ -3227,9 +2961,9 @@ async def callback(event):
             if not is_premium(uid):
                 await event.answer("Premium only!", alert=True)
                 return
-            user_states[uid] = {'action': 'custom_interval', 'step': 'group_delay'}
+            user_states[uid] = {'action': 'custom_interval', 'step': 'msg_delay'}
             await event.edit(
-                "⏱️ Custom Interval\n\nEnter group delay in seconds (30-300):",
+                "⏱️ Custom Interval\n\nEnter message delay in seconds (5-9999):",
                 buttons=[[Button.inline("← Back", b"menu_interval")]]
             )
             return
@@ -3357,10 +3091,190 @@ async def callback(event):
             )
             return
         
+        # Locked premium-only buttons in Settings menu
+        if data in {"locked_smart_rotation", "locked_auto_group_join"}:
+            await event.edit(
+                "<b>🔒 Premium Feature</b>\n\n<blockquote>Purchase Premium to unlock this feature.</blockquote>",
+                parse_mode='html',
+                buttons=[[Button.inline("💎 View Plans", b"back_plans")], [Button.inline("← Back", b"menu_settings")]]
+            )
+            return
+
         if data == "menu_settings":
-            text = "<b>⚙️ Settings</b>\n\n<i>Configure bot features and preferences.</i>"
+            user_doc = get_user(uid)
+            tier_settings = get_user_tier_settings(uid)
+            
+            # Get current settings
+            ads_mode = user_doc.get('ads_mode', 'saved').upper()
+            
+            # Auto-reply status (check if user has explicitly enabled it AND set a message)
+            auto_reply_feature_available = tier_settings.get('auto_reply_enabled', False)
+            if auto_reply_feature_available:
+                user = get_user(uid)
+                enabled_by_user = user.get('autoreply_enabled', False)  # Change default to False
+                
+                # Also check if user has actually set an auto-reply message
+                user_accounts = get_user_accounts(uid)
+                has_auto_reply_message = False
+                if user_accounts:
+                    for acc in user_accounts:
+                        settings = get_account_settings(str(acc.get('_id')))
+                        if settings.get('auto_reply'):
+                            has_auto_reply_message = True
+                            break
+                
+                # Show ON only if enabled AND has message
+                auto_reply_status = "✅ ON" if (enabled_by_user and has_auto_reply_message) else "❌ OFF"
+            else:
+                auto_reply_status = "❌ OFF"
+            
+            # Interval
+            preset = user_doc.get('interval_preset', 'medium')
+            if preset == 'custom':
+                custom = user_doc.get('custom_interval', {})
+                interval_display = f"Custom ({custom.get('msg_delay', 30)}s / {custom.get('round_delay', 600)}s)"
+            else:
+                interval_display = INTERVAL_PRESETS.get(preset, INTERVAL_PRESETS['medium'])['name']
+            
+            # Smart Rotation
+            smart_rotation = user_doc.get('smart_rotation', False)
+            rotation_status = "✅ ON" if smart_rotation else "❌ OFF"
+            
+            # Logs
+            logs_enabled = bool(user_doc.get('logs_chat_id'))
+            logs_status = "✅ Enabled" if logs_enabled else "❌ Disabled"
+            
+            # Auto Leave
+            auto_leave_enabled = user_doc.get('auto_leave_groups', True)
+            leave_status = "✅ ON" if auto_leave_enabled else "❌ OFF"
+            
+            text = (
+                "<b>⚙️ Settings</b>\n\n"
+                f"<b>📣 Ads Mode:</b> <code>{ads_mode}</code>\n\n"
+                f"<b>💬 Auto-Reply:</b> <code>{auto_reply_status}</code>\n\n"
+                f"<b>⏱️ Interval:</b> <code>{interval_display}</code>\n\n"
+                f"<b>🔄 Smart Rotation:</b> <code>{rotation_status}</code>\n\n"
+                f"<b>📝 Logs:</b> <code>{logs_status}</code>\n\n"
+                f"<b>🚪 Auto Leave Failed:</b> <code>{leave_status}</code>"
+            )
             await event.edit(text, parse_mode='html', buttons=settings_menu_keyboard(uid))
             return
+        
+        if data == "toggle_auto_leave":
+            user_doc = get_user(uid)
+            current = user_doc.get('auto_leave_groups', True)
+            new_value = not current
+            users_col.update_one({'user_id': int(uid)}, {'$set': {'auto_leave_groups': new_value}}, upsert=True)
+            
+            status = "enabled" if new_value else "disabled"
+            await event.answer(f"Auto Leave Failed {status}!", alert=True)
+            
+            # Refresh settings menu to show updated status
+            await event.edit("<b>⚙️ Settings</b>\n\n<i>Loading...</i>", parse_mode='html')
+            # Small delay before re-rendering
+            await asyncio.sleep(0.1)
+            
+            # Re-render full settings menu
+            user_doc = get_user(uid)
+            tier_settings = get_user_tier_settings(uid)
+            ads_mode = user_doc.get('ads_mode', 'saved').upper()
+            
+            # Auto-reply status (check if enabled and has message)
+            auto_reply_feature_available = tier_settings.get('auto_reply_enabled', False)
+            if auto_reply_feature_available:
+                user = get_user(uid)
+                enabled_by_user = user.get('autoreply_enabled', False)
+                user_accounts = get_user_accounts(uid)
+                has_auto_reply_message = False
+                if user_accounts:
+                    for acc in user_accounts:
+                        settings = get_account_settings(str(acc.get('_id')))
+                        if settings.get('auto_reply'):
+                            has_auto_reply_message = True
+                            break
+                auto_reply_status = "✅ ON" if (enabled_by_user and has_auto_reply_message) else "❌ OFF"
+            else:
+                auto_reply_status = "❌ OFF"
+            preset = user_doc.get('interval_preset', 'medium')
+            if preset == 'custom':
+                custom = user_doc.get('custom_interval', {})
+                interval_display = f"Custom ({custom.get('msg_delay', 30)}s / {custom.get('round_delay', 600)}s)"
+            else:
+                interval_display = INTERVAL_PRESETS.get(preset, INTERVAL_PRESETS['medium'])['name']
+            smart_rotation = user_doc.get('smart_rotation', False)
+            rotation_status = "✅ ON" if smart_rotation else "❌ OFF"
+            logs_enabled = bool(user_doc.get('logs_chat_id'))
+            logs_status = "✅ Enabled" if logs_enabled else "❌ Disabled"
+            leave_status = "✅ ON" if new_value else "❌ OFF"
+            
+            text = (
+                "<b>⚙️ Settings</b>\n\n"
+                f"<b>📣 Ads Mode:</b> <code>{ads_mode}</code>\n\n"
+                f"<b>💬 Auto-Reply:</b> <code>{auto_reply_status}</code>\n\n"
+                f"<b>⏱️ Interval:</b> <code>{interval_display}</code>\n\n"
+                f"<b>🔄 Smart Rotation:</b> <code>{rotation_status}</code>\n\n"
+                f"<b>📝 Logs:</b> <code>{logs_status}</code>\n\n"
+                f"<b>🚪 Auto Leave Failed:</b> <code>{leave_status}</code>"
+            )
+            await event.edit(text, parse_mode='html', buttons=settings_menu_keyboard(uid))
+            return
+        
+        if data == "refresh_all_groups":
+            # Refresh All Groups is FREE for everyone
+            accounts = get_user_accounts(uid)
+            if not accounts:
+                await event.answer("Add an account first!", alert=True)
+                return
+            
+            progress_msg = await event.respond("<b>🔄 Refreshing all groups...</b>", parse_mode='html')
+            
+            results = []
+            for acc in accounts:
+                account_id = str(acc['_id'])
+                phone = acc.get('phone', 'Unknown')[-4:]
+                
+                try:
+                    session_enc = acc.get('session')
+                    if not session_enc:
+                        results.append(f"<code>{phone}</code>: Session not found")
+                        continue
+                    
+                    session = cipher_suite.decrypt(session_enc.encode()).decode()
+                    client = TelegramClient(StringSession(session), CONFIG['api_id'], CONFIG['api_hash'])
+                    
+                    await client.connect()
+                    if not await client.is_user_authorized():
+                        results.append(f"<code>{phone}</code>: Session expired")
+                        await client.disconnect()
+                        continue
+                    
+                    # Count groups before refresh
+                    before_count = account_auto_groups_col.count_documents({'account_id': account_id})
+                    
+                    # Refresh groups
+                    count = await refresh_account_groups(client, account_id)
+                    
+                    # Count after refresh
+                    after_count = account_auto_groups_col.count_documents({'account_id': account_id})
+                    
+                    if after_count > before_count:
+                        results.append(f"<code>{phone}</code>: {before_count} → {after_count} (+{after_count - before_count})")
+                    else:
+                        results.append(f"<code>{phone}</code>: {before_count} (no new groups)")
+                    
+                    await client.disconnect()
+                    
+                except Exception as e:
+                    results.append(f"<code>{phone}</code>: Error - {str(e)[:30]}")
+            
+            if results:
+                result_text = "<b>🔄 Refresh Complete</b>\n\n" + "\n".join(results)
+            else:
+                result_text = "<b>❌ No groups refreshed</b>"
+            
+            await progress_msg.edit(result_text, parse_mode='html', buttons=[[Button.inline("Back", b"menu_settings")]])
+            return
+        
         if data == "menu_autoreply":
             tier = "Premium" if is_premium(uid) else "Free"
             text = f"<b>💬 Auto Reply</b>\n\n<b>Tier:</b> <code>{tier}</code>\n\n"
@@ -3508,24 +3422,26 @@ async def callback(event):
             return
         
         if data == "menu_logs":
-            # Logs are now free for everyone
             logger_bot_username = CONFIG.get('logger_bot_username', 'logstesthubot')
             logger_link = f"https://t.me/{logger_bot_username}"
-            
+
+            user_doc = get_user(uid)
+            enabled = bool(user_doc.get('logs_chat_id'))
+            status = "✅ Enabled" if enabled else "❌ Disabled"
+
+            buttons = [[Button.url("Start Logger Bot", logger_link)]]
+            if enabled:
+                buttons.append([Button.inline("Disable Logs", b"logs_disable_global")])
+            else:
+                buttons.append([Button.inline("Enable Logs", b"logs_enable_global")])
+            buttons.append([Button.inline("Back", b"enter_dashboard")])
+
             await event.edit(
-                "<b>📝 Logs Configuration</b>\n\n"
-                "<blockquote>Logs are sent via Logger Bot with View Message buttons.\n\n"
-                "To receive logs:\n"
-                "1. Start the Logger Bot\n"
-                "2. Click button below\n"
-                "3. Enable logs for your accounts</blockquote>\n\n"
-                "<i>Logs include forwarding activity with direct message links.</i>",
+                "<b>📝 Logs</b>\n\n"
+                "<blockquote>Once enabled, logs will be sent for <b>all</b> your added accounts.</blockquote>\n\n"
+                f"<b>Status:</b> <code>{status}</code>",
                 parse_mode='html',
-                buttons=[
-                    [Button.url("Start Logger Bot", logger_link)],
-                    [Button.inline("Configure Logs", b"logs_config")],
-                    [Button.inline("Back", b"enter_dashboard")]
-                ]
+                buttons=buttons
             )
             return
 
@@ -3624,7 +3540,11 @@ async def callback(event):
         # ===================== Smart Rotation (Premium) =====================
         if data == "menu_smart_rotation":
             if not is_premium(uid):
-                await event.answer("⭐ Premium feature only!", alert=True)
+                await event.edit(
+                    "<b>🔒 Premium Feature</b>\n\n<blockquote>Purchase Premium to unlock Smart Rotation.</blockquote>",
+                    parse_mode='html',
+                    buttons=[[Button.inline("💎 View Plans", b"back_plans")], [Button.inline("← Back", b"menu_settings")]]
+                )
                 return
             
             # Check if user has any accounts
@@ -3712,99 +3632,25 @@ async def callback(event):
             # Set user state to expect .txt file
             user_states[uid] = {'state': 'awaiting_group_join_file'}
             return
-        
-        
-        if data == "logs_config":
-            # Show old logs configuration for accounts
-            
-            accounts = get_user_accounts(uid)
-            if not accounts:
-                await event.answer("Add an account first!", alert=True)
-                return
-            
-            if len(accounts) == 1:
-                acc = accounts[0]
-                account_id = str(acc['_id'])
-                settings = get_account_settings(account_id)
-                logs_chat = settings.get('logs_chat_id')
 
-                if logs_chat:
-                    text = (
-                        "**Logs Configuration**\n\n"
-                        f"Status: Enabled\nDM Target: `{logs_chat}`\n\n"
-                        "Logs will be sent directly in your DM with View Message links."
-                    )
-                    buttons = [
-                        [Button.inline("Disable DM Logs", f"clearlogs_{account_id}")],
-                        [Button.inline("Back", b"enter_dashboard")]
-                    ]
-                else:
-                    text = (
-                        "**Logs Configuration**\n\n"
-                        "Status: Disabled\n\n"
-                        "Enable logs to receive them directly in DM."
-                    )
-                    buttons = [
-                        [Button.inline("Enable DM Logs", f"enablelogs_{account_id}")],
-                        [Button.inline("Back", b"enter_dashboard")]
-                    ]
-
-                await event.edit(text, parse_mode='html', buttons=buttons)
-            else:
-                text = "<b>Logs Configuration</b>\n\n<i>Select account to configure logs:</i>"
-                buttons = []
-                for acc in accounts:
-                    phone = acc['phone'][-4:]
-                    name = acc.get('name', 'Unknown')[:12]
-                    settings = get_account_settings(str(acc['_id']))
-                    status_icon = "Connected" if settings.get('logs_chat_id') else "Setup"
-                    buttons.append([Button.inline(f"{phone} - {name} ({status_icon})", f"logs_acc_{acc['_id']}")])
-                buttons.append([Button.inline("Back", b"enter_dashboard")])
-                await event.edit(text, parse_mode='html', buttons=buttons)
-            return
-        
-        if data.startswith("logs_acc_"):
-            account_id = data.replace("logs_acc_", "")
-
-            settings = get_account_settings(account_id)
-            logs_chat = settings.get('logs_chat_id')
-
-            if logs_chat:
-                status = f"Enabled (DM to you: `{logs_chat}`)"
-                text = (
-                    "**Logs Configuration**\n\n"
-                    f"Status: {status}\n\n"
-                    "Logs will be sent **directly in your DM** with View Message links."
-                )
-                buttons = [
-                    [Button.inline("Disable DM Logs", f"clearlogs_{account_id}")],
-                    [Button.inline("Back", b"menu_logs")]
-                ]
-            else:
-                status = "Disabled"
-                text = (
-                    "**Logs Configuration**\n\n"
-                    f"Status: {status}\n\n"
-                    "Click below to enable logs in your DM."
-                )
-                buttons = [
-                    [Button.inline("Enable DM Logs", f"enablelogs_{account_id}")],
-                    [Button.inline("Back", b"menu_logs")]
-                ]
-
-            await event.edit(text, parse_mode='html', buttons=buttons)
-            return
-        
-        if data.startswith("enablelogs_"):
-            account_id = data.replace("enablelogs_", "")
-            
-            # Logs are now free for everyone - Send logs directly to this user's DM
-            update_account_settings(account_id, {'logs_chat_id': int(uid)})
-            await event.answer("DM logs enabled!", alert=True)
+        if data == "logs_enable_global":
+            # Enable logs globally for user (applies to all accounts)
+            users_col.update_one({'user_id': int(uid)}, {'$set': {'logs_chat_id': int(uid)}}, upsert=True)
+            await event.answer("Logs enabled", alert=True)
             await event.edit(
-                "<b>✅ Logs Enabled</b>\n\n<i>You will now receive logs directly in DM.</i>",
+                "<b>✅ Logs Enabled</b>\n\n<blockquote>Logs will now be sent for <b>all</b> your added accounts.</blockquote>",
                 parse_mode='html',
-                buttons=[[Button.inline("← Back", f"acc_{account_id}")]]
+                buttons=[[Button.inline("Back", b"menu_logs")]]
+            )
+            return
+
+        if data == "logs_disable_global":
+            users_col.update_one({'user_id': int(uid)}, {'$unset': {'logs_chat_id': ""}})
+            await event.answer("Logs disabled", alert=True)
+            await event.edit(
+                "<b>❌ Logs Disabled</b>\n\n<i>You will no longer receive logs.</i>",
+                parse_mode='html',
+                buttons=[[Button.inline("Back", b"menu_logs")]]
             )
             return
 
@@ -3967,7 +3813,7 @@ async def callback(event):
                 f"<b>{tier} Dashboard</b>\n\n"
                 f"<b>Accounts:</b> <code>{len(accounts)}/{max_acc}</code>\n"
                 f"<b>Active:</b> <code>{active}</code> | <b>Inactive:</b> <code>{len(accounts) - active}</code>\n\n"
-                f"<b>Delays:</b> <code>{tier_settings['msg_delay']}s/{tier_settings['group_delay']}s/{tier_settings['round_delay']}s</code>"
+                f"<b>Delays:</b> <code>{tier_settings['msg_delay']}s msg / {tier_settings['round_delay']}s round</code>"
             )
 
             await event.edit(text, parse_mode='html', buttons=account_list_keyboard(uid))
@@ -4011,6 +3857,55 @@ async def callback(event):
             )
             
             await event.edit(text, parse_mode='html', buttons=admin_panel_keyboard())
+            return
+        
+        if data == "admin_admins":
+            if not is_admin(uid):
+                return
+            
+            # Show all admins with IDs and usernames
+            try:
+                owner_id = CONFIG.get('owner_id')
+                all_admins = list(admins_col.find({}, {'user_id': 1}))
+                admin_ids = [admin['user_id'] for admin in all_admins]
+                
+                text = "<b>ᴀᴅᴍɪɴꜱ ᴍᴀɴᴀɢᴇᴍᴇɴᴛ</b>\n\n"
+                text += "<blockquote><b>Commands:</b>\n"
+                text += "<code>/addadmin {user_id}</code>\n"
+                text += "<code>/rmadmin {user_id}</code></blockquote>\n\n"
+                text += "━━━━━━━━━━━━━━━\n\n"
+                text += "<b>ᴀᴅᴍɪɴꜱ ʟɪꜱᴛ</b>\n\n"
+                
+                # Show owner
+                try:
+                    owner = await main_bot.get_entity(int(owner_id))
+                    owner_username = f"@{owner.username}" if getattr(owner, 'username', None) else "ɴᴏ ᴜꜱᴇʀɴᴀᴍᴇ"
+                    owner_name = getattr(owner, 'first_name', 'Owner')
+                    text += f"👑 <b>ᴏᴡɴᴇʀ:</b> <code>{owner_id}</code>\n"
+                    text += f"   ɴᴀᴍᴇ: {owner_name}\n"
+                    text += f"   ᴜꜱᴇʀɴᴀᴍᴇ: {owner_username}\n\n"
+                except Exception:
+                    text += f"👑 <b>ᴏᴡɴᴇʀ:</b> <code>{owner_id}</code>\n\n"
+                
+                # Show admins
+                if admin_ids:
+                    text += f"👥 <b>ᴀᴅᴍɪɴꜱ ({len(admin_ids)}):</b>\n\n"
+                    for admin_id in admin_ids:
+                        try:
+                            admin = await main_bot.get_entity(int(admin_id))
+                            admin_username = f"@{admin.username}" if getattr(admin, 'username', None) else "ɴᴏ ᴜꜱᴇʀɴᴀᴍᴇ"
+                            admin_name = getattr(admin, 'first_name', 'Admin')
+                            text += f"   • <code>{admin_id}</code>\n"
+                            text += f"      ɴᴀᴍᴇ: {admin_name}\n"
+                            text += f"      ᴜꜱᴇʀɴᴀᴍᴇ: {admin_username}\n\n"
+                        except Exception:
+                            text += f"   • <code>{admin_id}</code>\n\n"
+                else:
+                    text += "👥 <b>ᴀᴅᴍɪɴꜱ:</b> ɴᴏ ᴀᴅᴍɪɴꜱ ᴀᴅᴅᴇᴅ"
+                
+                await event.edit(text, parse_mode='html', buttons=[[Button.inline("← Back", b"admin_panel")]])
+            except Exception as e:
+                await event.edit(f"<b>Error:</b> {str(e)}", parse_mode='html', buttons=[[Button.inline("← Back", b"admin_panel")]])
             return
         
         if data == "admin_all_users":
@@ -4245,7 +4140,7 @@ async def callback(event):
                 "<i>Your plan features are now active!</i>"
             )
             notify_buttons = [
-                [Button.inline("Check Plans", b"back_plans"), Button.inline("Kabru Ads Now!", b"enter_dashboard")]
+                [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
             ]
             
             try:
@@ -4295,7 +4190,7 @@ async def callback(event):
                 "<i>Your premium features are now active!</i>"
             )
             notify_buttons = [
-                [Button.inline("Check Plans", b"back_plans"), Button.inline("Kabru Ads Now!", b"enter_dashboard")]
+                [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
             ]
             
             try:
@@ -4345,7 +4240,7 @@ async def callback(event):
                 "<i>Your premium features are now active!</i>"
             )
             notify_buttons = [
-                [Button.inline("Check Plans", b"back_plans"), Button.inline("Kabru Ads Now!", b"enter_dashboard")]
+                [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
             ]
             
             try:
@@ -4395,7 +4290,7 @@ async def callback(event):
                 "<i>Your premium features are now active!</i>"
             )
             notify_buttons = [
-                [Button.inline("Check Plans", b"back_plans"), Button.inline("Kabru Ads Now!", b"enter_dashboard")]
+                [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
             ]
             
             try:
@@ -4525,6 +4420,18 @@ async def callback(event):
             
             status = "🟢 Running" if acc.get('is_forwarding') else "🔴 Stopped"
             
+            # Get user-level intervals
+            user_doc = get_user(uid)
+            preset = user_doc.get('interval_preset', 'medium')
+            if preset == 'custom':
+                custom = user_doc.get('custom_interval', {})
+                msg_d = custom.get('msg_delay', 30)
+                round_d = custom.get('round_delay', 600)
+            else:
+                interval_data = INTERVAL_PRESETS.get(preset, INTERVAL_PRESETS['medium'])
+                msg_d = interval_data['msg_delay']
+                round_d = interval_data['round_delay']
+            
             text = (
                 f"📱 **Account Details**\n\n"
                 f"Phone: {acc['phone']}\n"
@@ -4536,12 +4443,11 @@ async def callback(event):
                 f"Messages Sent: {stats.get('total_sent', 0)}\n"
                 f"Failed: {stats.get('total_failed', 0)}\n\n"
                 f"⏱️ **Delays**\n"
-                f"Message: {settings.get('msg_delay', 30)}s\n"
-                f"Group: {settings.get('group_delay', 90)}s\n"
-                f"Round: {settings.get('round_delay', 3600)}s"
+                f"ᴍᴇꜱꜱᴀɢᴇ ᴅᴇʟᴀʏ: {msg_d}ꜱ\n"
+                f"ʀᴏᴜɴᴅ ᴅᴇʟᴀʏ: {round_d}ꜱ"
             )
             
-            await event.edit(text, buttons=account_menu_keyboard(account_id, acc, uid))
+            await event.edit(text, parse_mode='markdown', buttons=account_menu_keyboard(account_id, acc, uid))
             return
         
         if data.startswith("topics_"):
@@ -4610,38 +4516,36 @@ async def callback(event):
             account_id = data.split("_")[1]
             settings = get_account_settings(account_id)
             
+            # Get user-level intervals
+            user_doc = get_user(uid)
+            preset = user_doc.get('interval_preset', 'medium')
+            if preset == 'custom':
+                custom = user_doc.get('custom_interval', {})
+                msg_d = custom.get('msg_delay', 30)
+                round_d = custom.get('round_delay', 600)
+            else:
+                interval_data = INTERVAL_PRESETS.get(preset, INTERVAL_PRESETS['medium'])
+                msg_d = interval_data['msg_delay']
+                round_d = interval_data['round_delay']
+            
             text = "**Settings**\n\n"
-            text += f"Message Delay: {settings.get('msg_delay', 30)}s\n"
-            text += f"Group Delay: {settings.get('group_delay', 90)}s (every 10 msgs)\n"
-            text += f"Round Delay: {settings.get('round_delay', 3600)}s\n"
+            text += f"ᴍᴇꜱꜱᴀɢᴇ ᴅᴇʟᴀʏ: {msg_d}ꜱ\n"
+            text += f"ʀᴏᴜɴᴅ ᴅᴇʟᴀʏ: {round_d}ꜱ\n"
             
             tier_settings = get_user_tier_settings(uid)
             if tier_settings.get('auto_reply_enabled'):
-                text += f"Auto-Reply: {settings.get('auto_reply', 'Default')[:40]}..."
+                auto_reply_text = settings.get('auto_reply', 'ᴅᴇꜰᴀᴜʟᴛ')
+                if auto_reply_text and auto_reply_text != 'ᴅᴇꜰᴀᴜʟᴛ':
+                    text += f"ᴀᴜᴛᴏ-ʀᴇᴘʟʏ: {auto_reply_text[:40]}...\n"
+                else:
+                    text += f"ᴀᴜᴛᴏ-ʀᴇᴘʟʏ: ᴅᴇꜰᴀᴜʟᴛ...\n"
             
             failed = account_failed_groups_col.count_documents({'account_id': account_id})
-            text += f"\nFailed Groups: {failed}"
+            text += f"ꜰᴀɪʟᴇᴅ ɢʀᴏᴜᴘꜱ: {failed}"
             
-            await event.edit(text, buttons=settings_keyboard(account_id, uid))
+            await event.edit(text, parse_mode='markdown', buttons=settings_keyboard(account_id, uid))
             return
-        
-        if data.startswith("setmsg_"):
-            account_id = data.split("_")[1]
-            user_states[uid] = {'action': 'set_msg_delay', 'account_id': account_id}
-            await event.respond("Enter message delay (minimum 3 seconds, max 300):")
-            return
-        
-        if data.startswith("setgrp_"):
-            account_id = data.split("_")[1]
-            user_states[uid] = {'action': 'set_grp_delay', 'account_id': account_id}
-            await event.respond("Enter group delay (10-600 seconds):")
-            return
-        
-        if data.startswith("setround_"):
-            account_id = data.split("_")[1]
-            user_states[uid] = {'action': 'set_round_delay', 'account_id': account_id}
-            await event.respond("Enter round delay (minimum 3600 seconds / 1 hour):")
-            return
+        # setmsg_ and setround_ removed: intervals are now user-level only (Settings -> Intervals)
         
         if data.startswith("setreply_"):
             tier_settings = get_user_tier_settings(uid)
@@ -4754,46 +4658,7 @@ async def callback(event):
             await event.edit("Forwarding stopped!", buttons=[[Button.inline("Back", f"acc_{account_id}")]])
             return
         
-        if data.startswith("clearlogs_"):
-            account_id = data.replace("clearlogs_", "")
-            update_account_settings(account_id, {'logs_chat_id': None})
-            await event.answer("Logs disabled!", alert=True)
-            await event.edit("**Logs Disabled**\n\nLogs will no longer be sent in DM.", buttons=[
-                [Button.inline("Back", f"acc_{account_id}")]
-            ])
-            return
-        
-        if data.startswith("logs_"):
-            account_id = data.replace("logs_", "")
-            
-            # Logs are now free for everyone
-
-            settings = get_account_settings(account_id)
-            logs_chat = settings.get('logs_chat_id')
-
-            if logs_chat:
-                text = (
-                    "**Logs Configuration**\n\n"
-                    f"Status: Enabled\nDM Target: `{logs_chat}`\n\n"
-                    "Logs will be sent in your DM with View Message links."
-                )
-                buttons = [
-                    [Button.inline("Disable DM Logs", f"clearlogs_{account_id}")],
-                    [Button.inline("Back", f"acc_{account_id}")]
-                ]
-            else:
-                text = (
-                    "**Logs Configuration**\n\n"
-                    "Status: Disabled\n\n"
-                    "Enable logs to receive them directly in DM."
-                )
-                buttons = [
-                    [Button.inline("Enable DM Logs", f"enablelogs_{account_id}")],
-                    [Button.inline("Back", f"acc_{account_id}")]
-                ]
-
-            await event.edit(text, parse_mode='html', buttons=buttons)
-            return
+        # (Removed legacy per-account log toggles; logs are user-level via menu_logs)
         
         if data.startswith("delete_"):
             account_id = data.split("_")[1]
@@ -5032,28 +4897,26 @@ async def text_handler(event):
         if not event.message.document:
             await event.respond("📄 Please send a .txt file with group links (one per line).", parse_mode='html')
             return
-        
+
         # Check if premium
         if not is_premium(uid):
             await event.respond("⭐ Premium feature only!")
             del user_states[uid]
             return
-        
+
         # Download file
         try:
             file_path = await event.message.download_media()
-            
-            # Read group links
+
             with open(file_path, 'r', encoding='utf-8') as f:
                 raw_lines = f.read().splitlines()
-            
+
             # Parse group links
             group_links = []
             for line in raw_lines:
-                line = line.strip()
+                line = (line or '').strip()
                 if not line or line.startswith('#'):
                     continue
-                # Extract username from various formats
                 if 'https://t.me/' in line:
                     username = line.split('https://t.me/')[-1].strip('/')
                 elif 't.me/' in line:
@@ -5062,132 +4925,174 @@ async def text_handler(event):
                     username = line[1:]
                 else:
                     username = line
-                
+
+                username = (username or '').strip().strip('/')
                 if username:
                     group_links.append(username)
-            
-            # Clean up downloaded file
-            import os
+
             try:
                 os.remove(file_path)
-            except:
+            except Exception:
                 pass
-            
+
+            # Deduplicate while preserving order
+            seen = set()
+            deduped = []
+            for u in group_links:
+                if u.lower() in seen:
+                    continue
+                seen.add(u.lower())
+                deduped.append(u)
+            group_links = deduped
+
             if not group_links:
                 await event.respond("❌ No valid group links found in the file.")
                 del user_states[uid]
                 return
-            
-            # Progress message (animation)
-            user_accounts = list(accounts_col.find({"owner_id": uid}))
+
+            user_accounts = list(accounts_col.find({'owner_id': uid}))
             if not user_accounts:
                 await event.respond("❌ Add an account first.")
                 del user_states[uid]
                 return
-            
+
+            # Requirements: join 50 groups per hour (batch) per account
+            BATCH_SIZE = 50
+            BATCH_WAIT_SECONDS = 3600
+
             total_ops = len(user_accounts) * len(group_links)
-            done = 0
-            joined = 0
-            failed = 0
-            
+            progress = {
+                'done': 0,
+                'joined': 0,
+                'failed': 0,
+                'current_batch': 1,
+            }
+
             progress_msg = await event.respond(
                 f"<b>Joining Groups...</b>\n\n"
                 f"<b>Accounts:</b> {len(user_accounts)}\n"
-                f"<b>Groups:</b> {len(group_links)}\n\n"
+                f"<b>Groups:</b> {len(group_links)}\n"
+                f"<b>Mode:</b> <code>{BATCH_SIZE}/hour</code>\n\n"
                 f"<b>Progress:</b> <code>0/{total_ops}</code>",
                 parse_mode='html',
                 buttons=[[Button.inline("Stop", b"auto_join_cancel"), Button.inline("Back", b"menu_auto_group_join")]]
             )
-            
-            # Shared counters with lock
+
             lock = asyncio.Lock()
-            stop_progress = False
+            stop_evt = asyncio.Event()
             auto_join_cancel[uid] = False
-            
+
             from telethon.tl.functions.channels import JoinChannelRequest
-            
+
             async def update_progress_loop():
-                last = -1
-                while not stop_progress:
-                    if auto_join_cancel.get(uid):
-                        stop_progress = True
-                        break
+                last = None
+                while not stop_evt.is_set():
                     await asyncio.sleep(1)
+                    if auto_join_cancel.get(uid):
+                        stop_evt.set()
+                        break
+
                     async with lock:
-                        cur = done
-                        j = joined
-                        f = failed
-                    if cur != last:
-                        last = cur
-                        try:
-                            await main_bot.edit_message(
-                                progress_msg.chat_id,
-                                progress_msg.id,
-                                f"<b>Joining Groups...</b>\n\n"
-                                f"<b>Accounts:</b> {len(user_accounts)}\n"
-                                f"<b>Groups:</b> {len(group_links)}\n\n"
-                                f"<b>Progress:</b> <code>{cur}/{total_ops}</code>\n"
-                                f"<b>Joined:</b> <code>{j}</code>\n"
-                                f"<b>Failed:</b> <code>{f}</code>",
-                                parse_mode='html'
-                            )
-                        except Exception:
-                            pass
-            
+                        snap = (progress['done'], progress['joined'], progress['failed'], progress['current_batch'])
+                    if snap == last:
+                        continue
+                    last = snap
+
+                    done, joined, failed, batch_no = snap
+                    try:
+                        await main_bot.edit_message(
+                            progress_msg.chat_id,
+                            progress_msg.id,
+                            f"<b>Joining Groups...</b>\n\n"
+                            f"<b>Accounts:</b> {len(user_accounts)}\n"
+                            f"<b>Groups:</b> {len(group_links)}\n"
+                            f"<b>Mode:</b> <code>{BATCH_SIZE}/hour</code>\n"
+                            f"<b>Batch:</b> <code>{batch_no}</code>\n\n"
+                            f"<b>Progress:</b> <code>{done}/{total_ops}</code>\n"
+                            f"<b>Joined:</b> <code>{joined}</code>\n"
+                            f"<b>Failed:</b> <code>{failed}</code>",
+                            parse_mode='html'
+                        )
+                    except Exception:
+                        pass
+
             async def join_with_account(acc):
-                if auto_join_cancel.get(uid):
-                    return
-                nonlocal done, joined, failed
-                account_id = acc.get('account_id') or str(acc.get('_id'))
+                account_id = acc.get('account_id') or acc.get('_id')
                 if not account_id:
                     return
-                
+
+                # decrypt session
                 try:
                     session_enc = acc.get('session')
                     if not session_enc:
                         return
                     session = cipher_suite.decrypt(session_enc.encode()).decode()
-                except Exception as e:
+                except Exception:
                     return
-                
+
                 client = TelegramClient(StringSession(session), CONFIG['api_id'], CONFIG['api_hash'])
                 try:
                     await client.connect()
                     if not await client.is_user_authorized():
                         return
-                    
-                    for username in group_links:
-                        if auto_join_cancel.get(uid):
+
+                    for idx, username in enumerate(group_links):
+                        if stop_evt.is_set() or auto_join_cancel.get(uid):
                             break
+
+                        # Batch throttle: after each 50 joins attempt, wait 1 hour
+                        if idx > 0 and (idx % BATCH_SIZE) == 0:
+                            async with lock:
+                                progress['current_batch'] += 1
+                            # Wait, but still allow cancel
+                            for _ in range(BATCH_WAIT_SECONDS):
+                                if stop_evt.is_set() or auto_join_cancel.get(uid):
+                                    break
+                                await asyncio.sleep(1)
+
                         try:
                             entity = await client.get_entity(username)
                             await client(JoinChannelRequest(entity))
                             async with lock:
-                                joined += 1
-                                done += 1
+                                progress['joined'] += 1
+                                progress['done'] += 1
+                        except FloodWaitError as e:
+                            # Respect floodwait for joining; don't count as failure but still counts as an attempt
+                            wait_s = int(getattr(e, 'seconds', 0) or 0)
+                            async with lock:
+                                progress['done'] += 1
+                            if wait_s > 0:
+                                for _ in range(wait_s):
+                                    if stop_evt.is_set() or auto_join_cancel.get(uid):
+                                        break
+                                    await asyncio.sleep(1)
                         except Exception:
                             async with lock:
-                                failed += 1
-                                done += 1
-                        await asyncio.sleep(1)  # small per-join delay
+                                progress['failed'] += 1
+                                progress['done'] += 1
+
+                        await asyncio.sleep(1)
+
                 finally:
                     try:
                         await client.disconnect()
                     except Exception:
                         pass
-            
-            # Run accounts in parallel
+
             progress_task = asyncio.create_task(update_progress_loop())
             account_tasks = [asyncio.create_task(join_with_account(acc)) for acc in user_accounts]
             await asyncio.gather(*account_tasks, return_exceptions=True)
-            stop_progress = True
-            auto_join_cancel[uid] = False
+            stop_evt.set()
             try:
                 await progress_task
             except Exception:
                 pass
-            
-            # Final message
+
+            async with lock:
+                done = progress['done']
+                joined = progress['joined']
+                failed = progress['failed']
+
             final_status = "✅ Complete" if not auto_join_cancel.get(uid) else "⏸ Stopped"
             await main_bot.edit_message(
                 progress_msg.chat_id,
@@ -5195,17 +5100,16 @@ async def text_handler(event):
                 f"<b>{final_status}</b>\n\n"
                 f"<b>Accounts:</b> {len(user_accounts)}\n"
                 f"<b>Groups:</b> {len(group_links)}\n\n"
-                f"<b>Total:</b> <code>{total_ops}</code>\n"
+                f"<b>Total Attempts:</b> <code>{done}/{total_ops}</code>\n"
                 f"<b>Joined:</b> <code>{joined}</code>\n"
                 f"<b>Failed:</b> <code>{failed}</code>",
                 parse_mode='html'
             )
-            
+
         except Exception as e:
             await event.respond(f"❌ Error processing file: {e}")
             print(f"[AUTO_JOIN] Error: {e}")
-        
-        # Clear user state
+
         del user_states[uid]
         return
     
@@ -5347,38 +5251,28 @@ async def text_handler(event):
             await event.respond("Please enter a valid number!")
             return
         
-        if step == 'group_delay':
-            if val < 30 or val > 300:
-                await event.respond("Enter a value between 30-300:")
-                return
-            user_states[uid]['group_delay'] = val
-            user_states[uid]['step'] = 'msg_delay'
-            await event.respond("Enter message delay in seconds (1-120):")
-            return
-        
         if step == 'msg_delay':
-            if val < 1 or val > 120:
-                await event.respond("Enter a value between 1-120:")
+            if val < 5 or val > 9999:
+                await event.respond("Enter a value between 5-9999:")
                 return
             user_states[uid]['msg_delay'] = val
             user_states[uid]['step'] = 'round_delay'
-            await event.respond("Enter round delay in seconds (600-86400):")
+            await event.respond("Enter round delay in seconds (60-9999):")
             return
         
         if step == 'round_delay':
-            if val < 600 or val > 86400:
-                await event.respond("Enter a value between 600-86400:")
+            if val < 60 or val > 9999:
+                await event.respond("Enter a value between 60-9999:")
                 return
             
             custom_interval = {
-                'group_delay': user_states[uid]['group_delay'],
                 'msg_delay': user_states[uid]['msg_delay'],
                 'round_delay': val
             }
             users_col.update_one({'user_id': uid}, {'$set': {'custom_interval': custom_interval, 'interval_preset': 'custom'}})
             del user_states[uid]
             await event.respond(
-                f"**Custom Interval Saved!**\n\nGroup Delay: {custom_interval['group_delay']}s\nMessage Delay: {custom_interval['msg_delay']}s\nRound Delay: {custom_interval['round_delay']}s",
+                f"**Custom Interval Saved!**\n\nMessage Delay: {custom_interval['msg_delay']}s\nRound Delay: {custom_interval['round_delay']}s",
                 buttons=[[Button.inline("Back to Dashboard", b"enter_dashboard")]]
             )
             return
@@ -5632,60 +5526,7 @@ async def text_handler(event):
         total = account_topics_col.count_documents({'account_id': account_id, 'topic': topic})
         await event.respond(f"Added {added} links!\nTotal: {total}/{max_groups}")
     
-    elif action == 'set_msg_delay':
-        try:
-            v = int(text)
-            
-            # Global minimum: 3 seconds
-            if v < 3:
-                await event.respond("Minimum: 3s (global limit)!")
-                return
-            if v > 300:
-                await event.respond("Maximum: 300s!")
-                return
-            
-            update_account_settings(state['account_id'], {'msg_delay': v})
-            del user_states[uid]
-            await event.respond(f"Message delay: {v}s")
-        except:
-            await event.respond("Invalid number!")
-    
-    elif action == 'set_grp_delay':
-        try:
-            v = int(text)
-            tier_settings = get_user_tier_settings(uid)
-            min_delay = tier_settings['group_delay']
-            
-            if v < min_delay:
-                await event.respond(f"Minimum: {min_delay}s for your tier!")
-                return
-            if v > 600:
-                await event.respond("Maximum: 600s!")
-                return
-            
-            update_account_settings(state['account_id'], {'group_delay': v})
-            del user_states[uid]
-            await event.respond(f"Group delay: {v}s")
-        except:
-            await event.respond("Invalid number!")
-    
-    elif action == 'set_round_delay':
-        try:
-            v = int(text)
-            
-            # Global minimum: 3600 seconds (1 hour)
-            if v < 3600:
-                await event.respond("Minimum: 3600s (1 hour - global limit)!")
-                return
-            if v > 86400:
-                await event.respond("Maximum: 86400s!")
-                return
-            
-            update_account_settings(state['account_id'], {'round_delay': v})
-            del user_states[uid]
-            await event.respond(f"Round delay: {v}s")
-        except:
-            await event.respond("Invalid number!")
+    # set_msg_delay and set_round_delay removed: intervals are user-level only
     
     elif action == 'set_reply':
         tier_settings = get_user_tier_settings(uid)
@@ -5767,10 +5608,10 @@ async def logger_start(event):
             return
     
     await event.respond(
-        "**Welcome to Kabru Ads Logger Bot**\n\n"
+        "**Welcome to AztechAds Logger Bot**\n\n"
         "This panel handles all your broadcast activity logs in real-time.\n"
         "Keep this chat open to stay updated on every action.\n\n"
-        "To begin sending ads, start the main bot: @KabruAdsBot",
+        "To begin sending ads, start the main bot: @aztechadsbot",
         _no_style=True
     )
 
@@ -5822,10 +5663,18 @@ async def forwarder_loop(account_id, selected_topic, user_id):
                 print(f"[{account_id}] Stopped")
                 break
             
-            settings = get_account_settings(account_id)
-            msg_delay = max(settings.get('msg_delay', 30), tier_settings['msg_delay'])
-            group_delay = max(settings.get('group_delay', 90), tier_settings['group_delay'])
-            round_delay = max(settings.get('round_delay', 3600), tier_settings['round_delay'])
+            # Get user-level intervals (check for custom first, then tier defaults)
+            user_doc = get_user(user_id)
+            preset = user_doc.get('interval_preset', 'medium')
+            if preset == 'custom' and user_doc.get('custom_interval'):
+                custom = user_doc['custom_interval']
+                msg_delay = custom.get('msg_delay', 30)
+                round_delay = custom.get('round_delay', 600)
+            else:
+                interval_data = INTERVAL_PRESETS.get(preset, INTERVAL_PRESETS['medium'])
+                msg_delay = interval_data.get('msg_delay', tier_settings['msg_delay'])
+                round_delay = interval_data.get('round_delay', tier_settings['round_delay'])
+            
             auto_reply_msg = settings.get('auto_reply', MESSAGES['auto_reply'])
             reply_cooldown = settings.get('reply_cooldown', 300)
             
@@ -5939,8 +5788,23 @@ async def forwarder_loop(account_id, selected_topic, user_id):
                         all_targets.append({'type': 'auto', 'data': g, 'key': group_key, 'name': group_name})
                 
                 active_waits = get_active_flood_waits(account_id)
+                
+                # Get user settings for log display
+                user_doc = get_user(user_id)
+                ads_mode_display = user_doc.get('ads_mode', 'saved').upper()
+                auto_leave = user_doc.get('auto_leave_groups', True)
+                auto_leave_status = "ON" if auto_leave else "OFF"
+                
                 print(f"[{account_id}] Forwarding to {len(all_targets)} groups (flood waits: {active_waits})")
-                await send_log(account_id, f"<b>🔄 Starting round</b>\nGroups: <code>{len(all_targets)}</code>\nFlood waits: <code>{active_waits}</code>")
+                await send_log(
+                    account_id, 
+                    f"<b>ꜱᴛᴀʀᴛɪɴɢ ʀᴏᴜɴᴅ</b>\n"
+                    f"<b>ᴍᴏᴅᴇ:</b> <code>ᴀᴜᴛᴏ</code>\n"
+                    f"<b>ᴀᴅꜱ ᴍᴏᴅᴇ:</b> <code>{ads_mode_display}</code>\n"
+                    f"<b>ᴀᴜᴛᴏ ʟᴇᴀᴠᴇ ꜰᴀɪʟᴇᴅ:</b> <code>{auto_leave_status}</code>\n\n"
+                    f"<b>Groups:</b> <code>{len(all_targets)}</code>\n"
+                    f"<b>Flood waits:</b> <code>{active_waits}</code>"
+                )
                 
                 # ===================== Smart Rotation (Premium) =====================
                 # Shuffle target order if enabled
@@ -6078,9 +5942,7 @@ async def forwarder_loop(account_id, selected_topic, user_id):
                         
                         await asyncio.sleep(msg_delay)
                         
-                        if (i + 1) % 10 == 0:
-                            print(f"[{account_id}] Group pause ({group_delay}s)")
-                            await asyncio.sleep(group_delay)
+                        # group_delay removed: msg_delay is used between each send
                         
                     except FloodWaitError as e:
                         wait_secs = e.seconds
@@ -6092,13 +5954,22 @@ async def forwarder_loop(account_id, selected_topic, user_id):
                         print(f"[{account_id}] FloodWait {mins}m in {group_name}")
                         await asyncio.sleep(msg_delay)
                         
-                    except (ChannelPrivateError, ChatWriteForbiddenError, UserBannedInChannelError) as e:
+                    except ChatWriteForbiddenError as e:
+                        # Sending/forwarding not allowed in this group - auto-leave if enabled
                         failed += 1
                         mark_group_failed(account_id, target['key'], str(e))
                         error_type = type(e).__name__
-                        print(f"[{account_id}] Failed {group_name}: {error_type}")
+                        
+                        # Check if auto-leave is enabled
+                        user_check = get_user(user_id)
+                        auto_leave_enabled = user_check.get('auto_leave_groups', True)
+                        
+                        if not auto_leave_enabled:
+                            print(f"[{account_id}] Failed {group_name}: {error_type} - Auto-leave DISABLED, not leaving")
+                            continue
+                        
+                        print(f"[{account_id}] Failed {group_name}: {error_type} - Auto-leaving")
 
-                        # Auto-leave the group if sending fails
                         try:
                             leave_target = current_entity
                             if leave_target is None:
@@ -6123,8 +5994,56 @@ async def forwarder_loop(account_id, selected_topic, user_id):
                                     await send_log(account_id, f"Leave attempt failed: {group_name}")
                         except Exception as le:
                             print(f"[{account_id}] Leave failed for {group_name}: {str(le)[:80]}")
+                        # No delay after auto-leave; continue immediately
 
-                        await asyncio.sleep(msg_delay)
+                    except UserBannedInChannelError as e:
+                        # User is banned from this group - auto-leave if enabled
+                        failed += 1
+                        mark_group_failed(account_id, target['key'], str(e))
+                        error_type = type(e).__name__
+                        
+                        # Check if auto-leave is enabled
+                        user_check = get_user(user_id)
+                        auto_leave_enabled = user_check.get('auto_leave_groups', True)
+                        
+                        if not auto_leave_enabled:
+                            print(f"[{account_id}] Failed {group_name}: {error_type} - Auto-leave DISABLED, not leaving")
+                            continue
+                        
+                        print(f"[{account_id}] Failed {group_name}: {error_type} - Auto-leaving")
+
+                        try:
+                            leave_target = current_entity
+                            if leave_target is None:
+                                if target.get('type') == 'topic':
+                                    d = target.get('data') or {}
+                                    leave_target = d.get('peer')
+                                    if leave_target is None and d.get('url'):
+                                        leave_target, _, _ = parse_link(d.get('url'))
+                                else:
+                                    d = target.get('data') or {}
+                                    leave_target = d.get('username') or d.get('group_id')
+                            if leave_target is not None:
+                                left_ok = await safe_leave_chat(client, leave_target)
+                                if left_ok:
+                                    remove_group_from_db(account_id, target.get('type'), group_key, target.get('data'))
+                                    try:
+                                        phone = (acc.get('phone') if acc else None)
+                                    except Exception:
+                                        phone = None
+                                    await notify_auto_left(account_id, phone, group_name, group_key, reason=error_type)
+                                else:
+                                    await send_log(account_id, f"Leave attempt failed: {group_name}")
+                        except Exception as le:
+                            print(f"[{account_id}] Leave failed for {group_name}: {str(le)[:80]}")
+                        # No delay after auto-leave; continue immediately
+
+                    except ChannelPrivateError as e:
+                        # Group is private/deleted - don't auto-leave, just mark as failed
+                        failed += 1
+                        mark_group_failed(account_id, target['key'], str(e))
+                        print(f"[{account_id}] Failed {group_name}: Group private/deleted - NOT auto-leaving")
+                        # No auto-leave for this error
                         
                     except Exception as e:
                         error_str = str(e)
@@ -6141,7 +6060,10 @@ async def forwarder_loop(account_id, selected_topic, user_id):
                             failed += 1
                             print(f"[{account_id}] Error {group_name}: {error_str[:50]}")
 
-                        # Auto-leave on any send/forward failure (non-flood)
+                        # Auto-leave on any send/forward failure (non-flood; only if enabled)
+                        if not _is_auto_leave_enabled(user_id):
+                            # Do not leave when disabled; just continue.
+                            continue
                         try:
                             leave_target = current_entity
                             if leave_target is None:
@@ -6167,7 +6089,7 @@ async def forwarder_loop(account_id, selected_topic, user_id):
                         except Exception as le:
                             print(f"[{account_id}] Leave failed for {group_name}: {str(le)[:80]}")
                         
-                        await asyncio.sleep(msg_delay)
+                        # No delay after auto-leave; continue immediately to next group
                 
                 update_account_stats(account_id, sent=sent, failed=failed)
                 
@@ -6175,9 +6097,22 @@ async def forwarder_loop(account_id, selected_topic, user_id):
                 await send_log(account_id, log_msg)
                 
                 print(f"[{account_id}] Round done! Sent: {sent}, Failed: {failed}")
-                print(f"[{account_id}] Waiting {round_delay}s...")
                 
-                await asyncio.sleep(round_delay)
+                # Check if still forwarding before waiting
+                acc = get_account_by_id(account_id)
+                if not acc or not acc.get('is_forwarding', False):
+                    print(f"[{account_id}] Stopped before round delay")
+                    await client.disconnect()
+                    break
+                
+                print(f"[{account_id}] Waiting {round_delay}s...")
+                for _ in range(round_delay):
+                    acc = get_account_by_id(account_id)
+                    if not acc or not acc.get('is_forwarding', False):
+                        print(f"[{account_id}] Stopped during round delay")
+                        break
+                    await asyncio.sleep(1)
+                
                 await client.disconnect()
                 
             except Exception as e:
@@ -6210,7 +6145,7 @@ async def forwarder_loop(account_id, selected_topic, user_id):
 
 async def main():
     print("\n" + "="*50)
-    print("Starting Ads Bot...")
+    print("Starting AztechAds Bot...")
     print("="*50)
     
     try:
@@ -6296,7 +6231,7 @@ async def cmd_grow(event):
         "<i>Your premium features are now active!</i>"
     )
     notify_buttons = [
-        [Button.inline("Check Plans", b"back_plans"), Button.inline("Kabru Ads Now!", b"enter_dashboard")]
+        [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
     ]
     
     try:
@@ -6342,7 +6277,7 @@ async def cmd_prime(event):
         "<i>Your premium features are now active!</i>"
     )
     notify_buttons = [
-        [Button.inline("Check Plans", b"back_plans"), Button.inline("Kabru Ads Now!", b"enter_dashboard")]
+        [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
     ]
     
     try:
@@ -6388,7 +6323,7 @@ async def cmd_domi(event):
         "<i>Your premium features are now active!</i>"
     )
     notify_buttons = [
-        [Button.inline("Check Plans", b"back_plans"), Button.inline("Kabru Ads Now!", b"enter_dashboard")]
+        [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
     ]
     
     try:
