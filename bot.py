@@ -39,7 +39,7 @@ import requests
 import qrcode
 import random
 
-from config import BOT_CONFIG, FREE_TIER, PREMIUM_TIER, MESSAGES, ADMIN_SETTINGS, TOPICS, INTERVAL_PRESETS, PROXIES, FORCE_JOIN, PLANS, PLAN_IMAGE_URL, UPI_PAYMENT
+from config import BOT_CONFIG, FREE_TIER, PREMIUM_TIER, MESSAGES, ADMIN_SETTINGS, TOPICS, INTERVAL_PRESETS, PROXIES, FORCE_JOIN, PLANS, PLAN_SCOUT, PLAN_IMAGES, UPI_PAYMENT
 import python_socks
 
 CONFIG = BOT_CONFIG
@@ -439,11 +439,9 @@ def is_admin(user_id):
     # Owner is always admin
     try:
         if int(user_id) == int(CONFIG['owner_id']):
-            print(f"[DEBUG] User {user_id} is OWNER - Admin access granted")
             return True
         # Check if user is in admins collection
         is_db_admin = admins_col.find_one({'user_id': int(user_id)}) is not None
-        print(f"[DEBUG] User {user_id} DB admin check: {is_db_admin}")
         return is_db_admin
     except Exception as e:
         print(f"[ERROR] is_admin check failed for {user_id}: {e}")
@@ -511,14 +509,20 @@ def approve_user(user_id):
 def set_user_premium(user_id, max_accounts, plan_name='premium'):
     """Grant premium with 30-day expiry (monthly subscription)."""
     expires_at = datetime.now() + timedelta(days=30)
+    
+    # Determine plan key (grow, prime, dominion) from plan_name
+    plan_key = plan_name.lower() if plan_name.lower() in ['grow', 'prime', 'dominion'] else 'grow'
+    
     users_col.update_one(
         {'user_id': int(user_id)},
         {'$set': {
             'tier': 'premium',
+            'plan': plan_key,  # Store plan key (grow/prime/dominion) for profile display
             'max_accounts': max_accounts,
             'plan_name': plan_name,  # Store actual plan name (Grow/Prime/Dominion)
             'premium_granted_at': datetime.now(),
             'premium_expires_at': expires_at,
+            'plan_expiry': expires_at,  # Add this for profile display
             'approved': True
         }},
         upsert=True
@@ -1454,18 +1458,31 @@ def render_dashboard_text(uid: int) -> str:
     
     accounts = get_user_accounts(uid)
     active = sum(1 for a in accounts if a.get('is_forwarding'))
-    mode = user.get('forwarding_mode', 'topics')
+    
+    # Fix mode display to show user-friendly text
+    mode_raw = user.get('forwarding_mode', 'topics')
+    if mode_raw == 'topics':
+        mode_display = "Topics Only"
+    elif mode_raw == 'auto':
+        mode_display = "Groups Only"
+    elif mode_raw == 'both':
+        mode_display = "Topics & Groups"
+    else:
+        mode_display = mode_raw.capitalize()
+    
+    # Get interval display name (Slow/Medium/Fast, not Safe/Balanced/Risky)
     preset = user.get('interval_preset', 'medium')
+    preset_display = preset.capitalize()
 
     return (
-        "<b>📊 Dashboard</b>\n\n"
-        + "\n".join([
-            ui_kv("Plan", f"{plan_name} ({expiry_text})"),
-            ui_kv("Accounts", f"{len(accounts)}/{max_acc} (active: {active})"),
-            ui_kv("Mode", mode),
-            ui_kv("Intervals", preset),
-        ])
-        + "\n\n<i>Use the menu below to manage accounts and start ads.</i>"
+        "<b>🏠 Dashboard</b>\n\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+        "<b>📊 Overview:</b>\n"
+        f"├ <b>Plan:</b> <code>{plan_name} ({expiry_text})</code>\n"
+        f"├ <b>Accounts:</b> <code>{len(accounts)}/{max_acc}</code> (Active: <code>{active}</code>)\n"
+        f"├ <b>Mode:</b> <code>{mode_display}</code>\n"
+        f"└ <b>Interval:</b> <code>{preset_display}</code>\n\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
     )
 
 
@@ -1542,11 +1559,18 @@ def main_dashboard_keyboard(user_id):
         Button.inline("\U0001F48E Plans", b"back_plans"),          # 💎
     ])
     
-    # Row 3: Start Ads button + Admin button (for admins only)
+    # Row 3: Start Ads + My Profile + Admin (for admins)
     if is_admin(user_id):
-        buttons.append([Button.inline(ads_btn, ads_data), Button.inline("\u2699\uFE0F Admin", b"admin_panel")])
+        buttons.append([
+            Button.inline(ads_btn, ads_data), 
+            Button.inline("\U0001F464 My Profile", b"my_profile"),  # 👤
+            Button.inline("\u2699\uFE0F Admin", b"admin_panel")
+        ])
     else:
-        buttons.append([Button.inline(ads_btn, ads_data)])
+        buttons.append([
+            Button.inline(ads_btn, ads_data), 
+            Button.inline("\U0001F464 My Profile", b"my_profile")  # 👤
+        ])
     
     return buttons
 
@@ -1587,12 +1611,19 @@ def account_list_keyboard(user_id, page=0):
 def settings_menu_keyboard(uid):
     """Settings menu with Auto Reply, Topics, Logs, Smart Rotation, Auto Group Join, Refresh All Groups, Auto Leave."""
     # Use Unicode escape sequences to avoid any editor/encoding corruption
-    buttons = [
-        [Button.inline("\U0001F4AC Auto Reply", b"menu_autoreply")],  # 💬
+    buttons = []
+    
+    # Auto Reply - Show locked for free users
+    if is_premium(uid):
+        buttons.append([Button.inline("\U0001F4AC Auto Reply", b"menu_autoreply")])  # 💬
+    else:
+        buttons.append([Button.inline("\U0001F4AC Auto Reply 🔒", b"locked_autoreply")])  # 💬🔒
+    
+    buttons.extend([
         [Button.inline("\U0001F4C2 Topics", b"menu_topics")],        # 📂
         [Button.inline("\U0001F4DD Logs", b"menu_logs")],            # 📝
         [Button.inline("\U0001F4E3 Ads Mode", b"menu_ads_mode")],     # 📣
-    ]
+    ])
     
     # Premium-only features (show locked for free users)
     if is_premium(uid):
@@ -1618,7 +1649,7 @@ def interval_menu_keyboard(user_id):
     current = user.get('interval_preset', 'medium')
 
     def mark_for(key: str) -> str:
-        return " ✓" if key == current else ""
+        return " ✅" if key == current else ""
 
     # All plans can use slow, medium, fast (risky) presets
     slow = Button.inline(f"{INTERVAL_PRESETS['slow']['name']}{mark_for('slow')}", b"interval_slow")
@@ -1627,7 +1658,7 @@ def interval_menu_keyboard(user_id):
 
     # Custom intervals are premium-only (Grow, Prime, Dominion plans)
     if is_premium(user_id):
-        custom_mark = " ✓" if current == 'custom' else ""
+        custom_mark = " ✅" if current == 'custom' else ""
         custom = Button.inline(f"Custom Settings{custom_mark}", b"interval_custom")
     else:
         # Free plan: show button but mark as locked
@@ -1750,16 +1781,19 @@ def admin_panel_keyboard():
 
 def account_menu_keyboard(account_id, acc, user_id):
     fwd = acc.get('is_forwarding', False)
-    btn = "Stop" if fwd else "Start"
-    data = f"stop_{account_id}" if fwd else f"fwd_select_{account_id}"
-
-    # Settings and Refresh Groups removed per user request
+    # Start button removed per user request
+    # Only show Stop button if account is running
     buttons = [
         [Button.inline("Topics", f"topics_{account_id}"), Button.inline("Stats", f"stats_{account_id}")],
-        [Button.inline(btn, data)],
-        [Button.inline("Delete", f"delete_{account_id}")],
-        [Button.inline("Back", b"enter_dashboard")],
     ]
+    
+    if fwd:
+        # Only show Stop button if account is currently running
+        buttons.append([Button.inline("Stop", f"stop_{account_id}")])
+    
+    buttons.append([Button.inline("Delete", f"delete_{account_id}")])
+    buttons.append([Button.inline("Back", b"enter_dashboard")])
+    
     return buttons
 
 def topics_menu_keyboard(account_id, user_id):
@@ -1841,8 +1875,9 @@ async def cmd_start(event):
         # User has accounts but no plan selected yet, show plan selection
         plan_msg = render_plan_select_text()
         
-        if PLAN_IMAGE_URL:
-            await event.respond(file=PLAN_IMAGE_URL, message=plan_msg, buttons=plan_select_keyboard(uid))
+        welcome_image = MESSAGES.get('welcome_image', '')
+        if welcome_image:
+            await event.respond(file=welcome_image, message=plan_msg, buttons=plan_select_keyboard(uid))
         else:
             await event.respond(plan_msg, buttons=plan_select_keyboard(uid))
     else:
@@ -2042,8 +2077,9 @@ async def cmd_upgrade(event):
         "• Dominion - Enterprise level (₹389)"
     )
     
-    if PLAN_IMAGE_URL:
-        await main_bot.send_file(uid, PLAN_IMAGE_URL, caption=plan_msg, buttons=plan_select_keyboard(uid))
+    welcome_image = MESSAGES.get('welcome_image', '')
+    if welcome_image:
+        await main_bot.send_file(uid, welcome_image, caption=plan_msg, buttons=plan_select_keyboard(uid))
     else:
         await event.respond(plan_msg, buttons=plan_select_keyboard(uid))
 
@@ -2277,10 +2313,12 @@ async def callback(event):
                         [Button.inline("← Back to Plans", b"back_plans")]
                     ]
             else:
-                # Paid plans - Check if user already has this plan
+                # Paid plans - Check if user already has this plan AND it's still active
                 user = get_user(uid)
                 user_plan_name = user.get('plan_name', '').lower()
-                is_active_plan = user_plan_name == plan_name
+                
+                # Check if plan matches AND user is still premium (not expired/revoked)
+                is_active_plan = (user_plan_name == plan_name) and is_premium(uid)
                 
                 detail_text += f"<b>Price: {plan['price_display']}</b>"
                 
@@ -2297,7 +2335,12 @@ async def callback(event):
                         [Button.inline("← Back to Plans", b"back_plans")]
                     ]
             
-            await event.edit(detail_text, parse_mode='html', buttons=buttons)
+            # Show plan-specific image if available
+            plan_image = PLAN_IMAGES.get(plan_name)
+            if plan_image and plan_name in ['grow', 'prime', 'dominion']:
+                await event.edit(file=plan_image, text=detail_text, parse_mode='html', buttons=buttons)
+            else:
+                await event.edit(detail_text, parse_mode='html', buttons=buttons)
             return
         
         if data == "activate_scout":
@@ -2524,14 +2567,15 @@ async def callback(event):
             # NEW FLOW: Show plan selection (not account add)
             plan_msg = render_plan_select_text()
             
-            if PLAN_IMAGE_URL:
+            welcome_image = MESSAGES.get('welcome_image', '')
+            if welcome_image:
                 try:
                     await event.delete()
                 except:
                     pass
                 await main_bot.send_file(
                     uid,
-                    PLAN_IMAGE_URL,
+                    welcome_image,
                     caption=plan_msg,
                     parse_mode='html',
                     buttons=plan_select_keyboard(uid)
@@ -2715,16 +2759,17 @@ async def callback(event):
             return
         
         if data == "back_plans":
-            # Return to plan selection screen
+            # Return to plan selection screen with welcome/start image
             plan_msg = (
                 "<b>💎 Choose Your Plan</b>\n\n"
                 "<blockquote>Select a plan that fits your advertising needs.\n"
                 "You can upgrade anytime.</blockquote>"
             )
 
-            if PLAN_IMAGE_URL:
-                # Edit caption/text only (media edit is tricky); just edit message text
-                await event.edit(plan_msg, parse_mode='html', buttons=plan_select_keyboard(uid))
+            # Show welcome/start image when returning to plans
+            welcome_image = MESSAGES.get('welcome_image', '')
+            if welcome_image:
+                await event.edit(file=welcome_image, text=plan_msg, parse_mode='html', buttons=plan_select_keyboard(uid))
             else:
                 await event.edit(plan_msg, parse_mode='html', buttons=plan_select_keyboard(uid))
             return
@@ -2747,12 +2792,13 @@ async def callback(event):
                     "• Dominion - Enterprise level (₹389)"
                 )
                 
-                if PLAN_IMAGE_URL:
+                welcome_image = MESSAGES.get('welcome_image', '')
+                if welcome_image:
                     try:
                         await event.delete()
                     except:
                         pass
-                    await main_bot.send_file(uid, PLAN_IMAGE_URL, caption=plan_msg, buttons=plan_select_keyboard(uid))
+                    await main_bot.send_file(uid, welcome_image, caption=plan_msg, buttons=plan_select_keyboard(uid))
                 else:
                     await event.edit(plan_msg, parse_mode='html', buttons=plan_select_keyboard(uid))
             else:
@@ -2889,17 +2935,163 @@ async def callback(event):
                 success_rate = (total_sent / (total_sent + total_failed)) * 100
 
             text = (
-                "<b>📈 Analytics</b>\n\n"
-                f"<b>Total Accounts:</b> <code>{len(accounts)}</code>\n"
-                f"<b>Active Accounts:</b> <code>{active}</code>\n"
-                f"<b>Total Groups:</b> <code>{total_groups}</code>\n\n"
-                f"<b>Messages Sent:</b> <code>{total_sent}</code>\n"
-                f"<b>Messages Failed:</b> <code>{total_failed}</code>\n"
-                f"<b>Success Rate:</b> <code>{success_rate:.1f}%</code>\n"
-                f"<b>Auto Replies:</b> <code>{total_auto_replies}</code>"
+                "<b>📊 Analytics</b>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                "<b>👥 Account Statistics:</b>\n"
+                f"├ <b>Total Accounts:</b> <code>{len(accounts)}</code>\n"
+                f"├ <b>Active Accounts:</b> <code>{active}</code>\n"
+                f"└ <b>Total Groups:</b> <code>{total_groups}</code>\n\n"
+                "<b>📈 Message Statistics:</b>\n"
+                f"├ <b>✅ Messages Sent:</b> <code>{total_sent}</code>\n"
+                f"├ <b>❌ Messages Failed:</b> <code>{total_failed}</code>\n"
+                f"├ <b>📊 Success Rate:</b> <code>{success_rate:.1f}%</code>\n"
+                f"└ <b>💬 Auto Replies:</b> <code>{total_auto_replies}</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
             )
 
             await event.edit(text, parse_mode='html', buttons=[[Button.inline("← Back", b"enter_dashboard")]])
+            return
+        
+        if data == "my_profile":
+            user = get_user(uid)
+            
+            # Check if user is admin for special display
+            if is_admin(uid):
+                # Admin/God Mode Display
+                accounts = get_user_accounts(uid)
+                active_accounts = sum(1 for acc in accounts if acc.get('is_forwarding'))
+                total_groups = 0
+                total_messages = 0
+                
+                for acc in accounts:
+                    account_id = str(acc['_id'])
+                    groups = account_auto_groups_col.count_documents({'account_id': account_id})
+                    total_groups += groups
+                    
+                    stats = account_stats_col.find_one({'account_id': account_id})
+                    if stats:
+                        total_messages += stats.get('total_sent', 0)
+                
+                # Get current settings
+                interval_preset = user.get('interval_preset', 'medium')
+                if interval_preset == 'custom':
+                    custom = user.get('custom_interval', {})
+                    interval_str = f"Custom ({custom.get('msg_delay', 30)}s / {custom.get('round_delay', 600)}s)"
+                else:
+                    preset_info = INTERVAL_PRESETS.get(interval_preset, INTERVAL_PRESETS['medium'])
+                    # Show only preset name (Slow/Medium/Fast) without Safe/Balanced/Risky
+                    preset_name = interval_preset.capitalize()
+                    interval_str = f"{preset_name} ({preset_info['msg_delay']}s / {preset_info['round_delay']}s)"
+                
+                # Get actual feature status from user settings (not hardcoded for admins)
+                auto_reply = "✅ Enabled" if user.get('auto_reply_enabled') else "❌ Disabled"
+                smart_rotation = "✅ Enabled" if user.get('smart_rotation_enabled') else "❌ Disabled"
+                logs = "✅ Enabled" if user.get('logs_enabled') else "❌ Disabled"
+                
+                try:
+                    username = f"@{event.sender.username}" if event.sender.username else "Not set"
+                except:
+                    username = "Not set"
+                
+                text = (
+                    f"<b>👤 My Profile</b>\n\n"
+                    f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    f"<b>📱 User Details:</b>\n"
+                    f"├ <b>User ID:</b> <code>{uid}</code>\n"
+                    f"├ <b>Username:</b> <code>{username}</code>\n"
+                    f"└ <b>Plan:</b> ⚡ <b>God Mode</b>\n\n"
+                    f"<b>💎 Subscription:</b>\n"
+                    f"├ <b>Expires On:</b> <code>∞ Never</code>\n"
+                    f"└ <b>Days Left:</b> <code>∞ Unlimited</code>\n\n"
+                    f"<b>📊 Usage Statistics:</b>\n"
+                    f"├ <b>Total Accounts:</b> <code>{len(accounts)}/999</code>\n"
+                    f"├ <b>Active Accounts:</b> <code>{active_accounts}</code>\n"
+                    f"├ <b>Total Groups:</b> <code>{total_groups}</code>\n"
+                    f"└ <b>Total Messages Sent:</b> <code>{total_messages}</code>\n\n"
+                    f"<b>⚙️ Current Settings:</b>\n"
+                    f"├ <b>Interval:</b> <code>{interval_str}</code>\n"
+                    f"├ <b>Auto Reply:</b> {auto_reply}\n"
+                    f"├ <b>Smart Rotation:</b> {smart_rotation}\n"
+                    f"└ <b>Logs:</b> {logs}\n\n"
+                    f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
+                )
+            else:
+                # Regular User Display
+                plan_key = user.get('plan', 'scout')
+                plan = PLANS.get(plan_key, PLAN_SCOUT)
+                
+                # Calculate expiry and days remaining
+                expiry_date = user.get('plan_expiry')
+                if expiry_date:
+                    days_remaining = (expiry_date - datetime.now()).days
+                    expiry_str = expiry_date.strftime('%d %b %Y')
+                    days_str = f"{days_remaining} days" if days_remaining > 0 else "Expired"
+                else:
+                    expiry_str = "Never (Free Plan)"
+                    days_str = "∞ Unlimited"
+                
+                # Get usage statistics
+                accounts = get_user_accounts(uid)
+                active_accounts = sum(1 for acc in accounts if acc.get('is_forwarding'))
+                total_groups = 0
+                total_messages = 0
+                
+                for acc in accounts:
+                    account_id = str(acc['_id'])
+                    groups = account_auto_groups_col.count_documents({'account_id': account_id})
+                    total_groups += groups
+                    
+                    # Get total messages sent
+                    stats = account_stats_col.find_one({'account_id': account_id})
+                    if stats:
+                        total_messages += stats.get('total_sent', 0)
+                
+                # Get current settings
+                interval_preset = user.get('interval_preset', 'medium')
+                if interval_preset == 'custom':
+                    custom = user.get('custom_interval', {})
+                    interval_str = f"Custom ({custom.get('msg_delay', 30)}s / {custom.get('round_delay', 600)}s)"
+                else:
+                    preset_info = INTERVAL_PRESETS.get(interval_preset, INTERVAL_PRESETS['medium'])
+                    # Show only preset name (Slow/Medium/Fast) without Safe/Balanced/Risky
+                    preset_name = interval_preset.capitalize()
+                    interval_str = f"{preset_name} ({preset_info['msg_delay']}s / {preset_info['round_delay']}s)"
+                
+                # Fix: Check actual user settings, not just premium status
+                auto_reply = "✅ Enabled" if user.get('auto_reply_enabled') else "❌ Disabled"
+                smart_rotation = "✅ Enabled" if user.get('smart_rotation_enabled') else "❌ Disabled"
+                logs = "✅ Enabled" if user.get('logs_enabled') else "❌ Disabled"
+                
+                # Get username
+                try:
+                    username = f"@{event.sender.username}" if event.sender.username else "Not set"
+                except:
+                    username = "Not set"
+                
+                text = (
+                    f"<b>👤 My Profile</b>\n\n"
+                    f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    f"<b>📱 User Details:</b>\n"
+                    f"├ <b>User ID:</b> <code>{uid}</code>\n"
+                    f"├ <b>Username:</b> <code>{username}</code>\n"
+                    f"└ <b>Plan:</b> {plan['emoji']} <b>{plan['name']}</b>\n\n"
+                    f"<b>💎 Subscription:</b>\n"
+                    f"├ <b>Expires On:</b> <code>{expiry_str}</code>\n"
+                    f"└ <b>Days Left:</b> <code>{days_str}</code>\n\n"
+                    f"<b>📊 Usage Statistics:</b>\n"
+                    f"├ <b>Total Accounts:</b> <code>{len(accounts)}/{plan['max_accounts']}</code>\n"
+                    f"├ <b>Active Accounts:</b> <code>{active_accounts}</code>\n"
+                    f"├ <b>Total Groups:</b> <code>{total_groups}</code>\n"
+                    f"└ <b>Total Messages Sent:</b> <code>{total_messages}</code>\n\n"
+                    f"<b>⚙️ Current Settings:</b>\n"
+                    f"├ <b>Interval:</b> <code>{interval_str}</code>\n"
+                    f"├ <b>Auto Reply:</b> {auto_reply}\n"
+                    f"├ <b>Smart Rotation:</b> {smart_rotation}\n"
+                    f"└ <b>Logs:</b> {logs}\n\n"
+                    f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
+                )
+            
+            await event.edit(text, parse_mode='html', buttons=[[Button.inline("← Back to Dashboard", b"enter_dashboard")]])
             return
         
         if data == "menu_interval":
@@ -2909,21 +3101,28 @@ async def callback(event):
             if current == 'custom' and user.get('custom_interval'):
                 custom = user['custom_interval']
                 text = (
-                    "⏱️ Interval Settings\n\n"
-                    "Current: Custom\n\n"
-                    f"Message Delay: {custom['msg_delay']}s\n"
-                    f"Round Delay: {custom['round_delay']}s"
+                    "<b>⏱️ Interval Settings</b>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    "<b>📋 Current Configuration:</b>\n"
+                    "├ <b>Mode:</b> <code>Custom</code>\n"
+                    f"├ <b>⏰ Message Delay:</b> <code>{custom['msg_delay']}s</code>\n"
+                    f"└ <b>🔄 Round Delay:</b> <code>{custom['round_delay']}s</code>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
                 )
             else:
                 preset = INTERVAL_PRESETS.get(current, INTERVAL_PRESETS['medium'])
+                preset_name = current.capitalize()
                 text = (
-                    "⏱️ Interval Settings\n\n"
-                    f"Current: {preset['name']}\n\n"
-                    f"Message Delay: {preset['msg_delay']}s\n"
-                    f"Round Delay: {preset['round_delay']}s"
+                    "<b>⏱️ Interval Settings</b>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    "<b>📋 Current Configuration:</b>\n"
+                    f"├ <b>Mode:</b> <code>{preset_name}</code>\n"
+                    f"├ <b>⏰ Message Delay:</b> <code>{preset['msg_delay']}s</code>\n"
+                    f"└ <b>🔄 Round Delay:</b> <code>{preset['round_delay']}s</code>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
                 )
             
-            await event.edit(text, buttons=interval_menu_keyboard(uid))
+            await event.edit(text, parse_mode='html', buttons=interval_menu_keyboard(uid))
             return
         
         if data.startswith("interval_") and data not in ("interval_locked", "interval_custom"):
@@ -2932,15 +3131,19 @@ async def callback(event):
             if preset_key in INTERVAL_PRESETS:
                 users_col.update_one({'user_id': uid}, {'$set': {'interval_preset': preset_key}})
                 preset = INTERVAL_PRESETS[preset_key]
-                await event.answer(f"Interval set to: {preset['name']}", alert=True)
+                preset_name = preset_key.capitalize()
+                await event.answer(f"Interval set to: {preset_name}", alert=True)
 
                 text = (
-                    "⏱️ Interval Settings\n\n"
-                    f"Current: {preset['name']}\n\n"
-                    f"Message Delay: {preset['msg_delay']}s\n"
-                    f"Round Delay: {preset['round_delay']}s"
+                    "<b>⏱️ Interval Settings</b>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    "<b>📋 Current Configuration:</b>\n"
+                    f"├ <b>Mode:</b> <code>{preset_name}</code>\n"
+                    f"├ <b>⏰ Message Delay:</b> <code>{preset['msg_delay']}s</code>\n"
+                    f"└ <b>🔄 Round Delay:</b> <code>{preset['round_delay']}s</code>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
                 )
-                await event.edit(text, buttons=interval_menu_keyboard(uid))
+                await event.edit(text, parse_mode='html', buttons=interval_menu_keyboard(uid))
             return
         
         if data == "interval_locked":
@@ -3092,7 +3295,7 @@ async def callback(event):
             return
         
         # Locked premium-only buttons in Settings menu
-        if data in {"locked_smart_rotation", "locked_auto_group_join"}:
+        if data in {"locked_smart_rotation", "locked_auto_group_join", "locked_autoreply"}:
             await event.edit(
                 "<b>🔒 Premium Feature</b>\n\n<blockquote>Purchase Premium to unlock this feature.</blockquote>",
                 parse_mode='html',
@@ -3128,13 +3331,18 @@ async def callback(event):
             else:
                 auto_reply_status = "❌ OFF"
             
-            # Interval
+            # Interval - Show delays with preset name (Slow/Medium/Fast, not Safe/Balanced/Risky)
             preset = user_doc.get('interval_preset', 'medium')
             if preset == 'custom':
                 custom = user_doc.get('custom_interval', {})
                 interval_display = f"Custom ({custom.get('msg_delay', 30)}s / {custom.get('round_delay', 600)}s)"
             else:
-                interval_display = INTERVAL_PRESETS.get(preset, INTERVAL_PRESETS['medium'])['name']
+                preset_info = INTERVAL_PRESETS.get(preset, INTERVAL_PRESETS['medium'])
+                msg_delay = preset_info['msg_delay']
+                round_delay = preset_info['round_delay']
+                # Show only preset name (Slow/Medium/Fast) without Safe/Balanced/Risky
+                preset_name = preset.capitalize()
+                interval_display = f"{preset_name} ({msg_delay}s / {round_delay}s)"
             
             # Smart Rotation
             smart_rotation = user_doc.get('smart_rotation', False)
@@ -3150,12 +3358,15 @@ async def callback(event):
             
             text = (
                 "<b>⚙️ Settings</b>\n\n"
-                f"<b>📣 Ads Mode:</b> <code>{ads_mode}</code>\n\n"
-                f"<b>💬 Auto-Reply:</b> <code>{auto_reply_status}</code>\n\n"
-                f"<b>⏱️ Interval:</b> <code>{interval_display}</code>\n\n"
-                f"<b>🔄 Smart Rotation:</b> <code>{rotation_status}</code>\n\n"
-                f"<b>📝 Logs:</b> <code>{logs_status}</code>\n\n"
-                f"<b>🚪 Auto Leave Failed:</b> <code>{leave_status}</code>"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                "<b>📋 Current Configuration:</b>\n"
+                f"├ <b>📣 Ads Mode:</b> <code>{ads_mode}</code>\n"
+                f"├ <b>💬 Auto-Reply:</b> <code>{auto_reply_status}</code>\n"
+                f"├ <b>⏱️ Interval:</b> <code>{interval_display}</code>\n"
+                f"├ <b>🔄 Smart Rotation:</b> <code>{rotation_status}</code>\n"
+                f"├ <b>📝 Logs:</b> <code>{logs_status}</code>\n"
+                f"└ <b>🚫 Auto Leave Failed:</b> <code>{leave_status}</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
             )
             await event.edit(text, parse_mode='html', buttons=settings_menu_keyboard(uid))
             return
@@ -3384,12 +3595,13 @@ async def callback(event):
                 "• Dominion - Enterprise level (₹389)"
             )
             
-            if PLAN_IMAGE_URL:
+            welcome_image = MESSAGES.get('welcome_image', '')
+            if welcome_image:
                 try:
                     await event.delete()
                 except:
                     pass
-                await main_bot.send_file(uid, PLAN_IMAGE_URL, caption=plan_msg, buttons=plan_select_keyboard(uid))
+                await main_bot.send_file(uid, welcome_image, caption=plan_msg, buttons=plan_select_keyboard(uid))
             else:
                 await event.edit(plan_msg, buttons=plan_select_keyboard(uid))
             return
@@ -3659,19 +3871,18 @@ async def callback(event):
             current = user.get('forwarding_mode', 'topics')
             modes = {
                 'topics': 'Forward to Topics Only',
-                'auto': 'Forward to Auto Groups Only',
-                'both': 'Forward to Both (Topics first, then Auto)'
+                'auto': 'Forward to Groups Only',
+                'both': 'Forward to Both (Topics first, then Groups)'
             }
             
             text = (
-                "<b>📤 Forwarding Mode</b>\n\n"
-                "<blockquote>Select how ads should be forwarded.</blockquote>\n\n"
-                f"<b>Current:</b> <code>{modes.get(current, 'Topics Only')}</code>"
+                "<b>🔄 Forwarding Mode</b>\n\n"
+                "<blockquote>Select how ads should be forwarded.</blockquote>"
             )
             
             buttons = []
             for mode, label in modes.items():
-                mark = " (Current)" if mode == current else ""
+                mark = " ✅" if mode == current else ""
                 buttons.append([Button.inline(f"{label}{mark}", f"set_fwd_mode_{mode}")])
             buttons.append([Button.inline("← Back", b"enter_dashboard")])
             
@@ -3683,20 +3894,19 @@ async def callback(event):
             users_col.update_one({'user_id': uid}, {'$set': {'forwarding_mode': mode}})
             modes = {
                 'topics': 'Forward to Topics Only',
-                'auto': 'Forward to Auto Groups Only',
-                'both': 'Forward to Both (Topics first, then Auto)'
+                'auto': 'Forward to Groups Only',
+                'both': 'Forward to Both (Topics first, then Groups)'
             }
             await event.answer(f"Mode set: {modes.get(mode, mode)}", alert=True)
             
             text = (
-                "<b>📤 Forwarding Mode</b>\n\n"
-                "<blockquote>Select how ads should be forwarded.</blockquote>\n\n"
-                f"<b>Current:</b> <code>{modes.get(mode, 'Topics Only')}</code>"
+                "<b>🔄 Forwarding Mode</b>\n\n"
+                "<blockquote>Select how ads should be forwarded.</blockquote>"
             )
             
             buttons = []
             for m, label in modes.items():
-                mark = " (Current)" if m == mode else ""
+                mark = " ✅" if m == mode else ""
                 buttons.append([Button.inline(f"{label}{mark}", f"set_fwd_mode_{m}")])
             buttons.append([Button.inline("← Back", b"enter_dashboard")])
             
@@ -5398,8 +5608,9 @@ async def text_handler(event):
                 f"• Dominion - Enterprise level (₹389)"
             )
             
-            if PLAN_IMAGE_URL:
-                await event.respond(file=PLAN_IMAGE_URL, message=plan_msg, buttons=plan_select_keyboard(uid))
+            welcome_image = MESSAGES.get('welcome_image', '')
+            if welcome_image:
+                await event.respond(file=welcome_image, message=plan_msg, buttons=plan_select_keyboard(uid))
             else:
                 await event.respond(plan_msg, buttons=plan_select_keyboard(uid))
             
@@ -5476,8 +5687,9 @@ async def text_handler(event):
                 f"• Dominion - Enterprise level (₹389)"
             )
             
-            if PLAN_IMAGE_URL:
-                await event.respond(file=PLAN_IMAGE_URL, message=plan_msg, buttons=plan_select_keyboard(uid))
+            welcome_image = MESSAGES.get('welcome_image', '')
+            if welcome_image:
+                await event.respond(file=welcome_image, message=plan_msg, buttons=plan_select_keyboard(uid))
             else:
                 await event.respond(plan_msg, buttons=plan_select_keyboard(uid))
             
