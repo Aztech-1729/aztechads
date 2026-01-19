@@ -876,8 +876,10 @@ async def run_forwarding_loop(user_id, account_id):
                 
                 print(f"[AUTO-REPLY] Attached to account {account_id} with message: {reply_text[:30]}...")
         
+        round_num = 0
         while True:
             try:
+                round_num += 1
                 acc = accounts_col.find_one({'_id': account_id})
                 if not acc or not acc.get('is_forwarding'):
                     print(f"[FORWARDING] Account {account_id} stopped")
@@ -1227,7 +1229,7 @@ async def run_forwarding_loop(user_id, account_id):
                 
                 print(f"[FORWARDING] Round complete. Sent: {sent}, Failed: {failed}, Skipped: {skipped}")
                 try:
-                    await send_log(account_id, f"<b>✅ Round {round_num} complete</b>\n📤 Sent: <code>{sent}</code> | ❌ Failed: <code>{failed}</code> | ⏭ Skipped: <code>{skipped}</code>\n\n⏰ Next: <code>{round_delay}s</code>")
+                    await send_log(account_id, f"<b>✅ Round {round_num} Completed</b>\n\n📤 <b>Sent:</b> <code>{sent}</code> | ❌ <b>Failed:</b> <code>{failed}</code> | ⏭ <b>Skipped:</b> <code>{skipped}</code>\n\n⏰ <b>Next Round:</b> <code>{round_delay}s</code>")
                 except Exception:
                     pass
                 await add_user_log(user_id, f"Round: {sent} sent, {failed} failed, {skipped} skipped")
@@ -1344,6 +1346,11 @@ async def refresh_account_groups(client, account_id):
     except Exception as e:
         print(f"[refresh_account_groups] Error: {e}")
         return 0
+
+
+async def fetch_groups_for_account(client, account_id):
+    """Compatibility wrapper used by the dashboard refresh action."""
+    return await refresh_account_groups(client, account_id)
 
 
 async def fetch_groups(client, account_id, phone):
