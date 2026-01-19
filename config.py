@@ -5,7 +5,6 @@ BOT_CONFIG = {
     'api_hash': os.getenv('TELEGRAM_API_HASH', '8a39446c6f69527dbfbb8e0e6c6a146f'),
     'bot_token': os.getenv('BOT_TOKEN', '8407662292:AAFWtt2AFyLu1NK25n5SN_AdaTujhVmH8-w'),
     'owner_id': int(os.getenv('OWNER_ID', '6670166083')),
-    'access_password': os.getenv('ACCESS_PASSWORD', 'ADSREACHOP'),
     'mongo_uri': os.getenv('MONGO_URI', 'mongodb+srv://aztech:ayazahmed1122@cluster0.mhuaw3q.mongodb.net/aztechads_db?retryWrites=true&w=majority'),
     'db_name': os.getenv('MONGO_DB_NAME', 'aztechads_db'),
     'logger_bot_token': os.getenv('LOGGER_BOT_TOKEN', '8392058083:AAG1XN-1XqZMRmhtA2OrNvVT3jesMEKEuTI'),
@@ -161,11 +160,6 @@ UPI_PAYMENT = {
     'payee_name': os.getenv('UPI_PAYEE_NAME', 'MOHAMMED AYAZ AHMED'),
 }
 
-ADMIN_SETTINGS = {
-    'default_premium_accounts': 5,
-    'default_premium_days': 30,
-}
-
 INTERVAL_PRESETS = {
     'slow': {'msg_delay': 60, 'round_delay': 900, 'name': 'Slow (Safe)'},
     'medium': {'msg_delay': 30, 'round_delay': 600, 'name': 'Medium (Balanced)'},
@@ -173,25 +167,4 @@ INTERVAL_PRESETS = {
 }
 
 TOPICS = ['instagram', 'exchange', 'twitter', 'telegram', 'minecraft', 'tiktok', 'youtube', 'whatsapp', 'other']
-
-# Proxy configuration for account logins
-# Format: list of proxy dicts with type, host, port, username (optional), password (optional)
-# Types: 'socks5', 'socks4', 'http'
-# Example: {'type': 'socks5', 'host': '127.0.0.1', 'port': 1080, 'username': None, 'password': None}
-PROXIES = []
-
-# Add proxies from environment variable if set (comma-separated: type:host:port or type:host:port:user:pass)
-proxy_env = os.getenv('PROXIES', '')
-if proxy_env:
-    for p in proxy_env.split(','):
-        parts = p.strip().split(':')
-        if len(parts) >= 3:
-            proxy = {
-                'type': parts[0],
-                'host': parts[1],
-                'port': int(parts[2]),
-                'username': parts[3] if len(parts) > 3 else None,
-                'password': parts[4] if len(parts) > 4 else None
-            }
-            PROXIES.append(proxy)
 
