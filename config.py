@@ -93,7 +93,7 @@ ADMIN_USERNAME = "aztechdeveloper"
 
 MESSAGES = {
     'welcome': "Welcome to AztechAds Bot!\n\nManage your Telegram advertising campaigns with ease.",
-    'welcome_image': os.getenv('WELCOME_IMAGE', 'https://i.ibb.co/bg4ZtxrR/Chat-GPT-Image-Jan-19-2026-12-27-33-AM.png'),
+    'welcome_image': os.getenv('WELCOME_IMAGE', 'https://i.ibb.co/Pzss9bcR/Chat-GPT-Image-Jan-19-2026-08-13-38-PM.png'),
 
     # ===================== Account Profile Templates =====================
     # Applied to ALL added accounts when user opens dashboard (/start).
@@ -139,15 +139,19 @@ FORCE_JOIN = {
     # group_username removed (no forced group join)
 
     # Lock screen visuals
-    'image_url': os.getenv('FORCE_JOIN_IMAGE', 'https://i.ibb.co/bg4ZtxrR/Chat-GPT-Image-Jan-19-2026-12-27-33-AM.png'),
+    'image_url': os.getenv('FORCE_JOIN_IMAGE', 'https://i.ibb.co/Pzss9bcR/Chat-GPT-Image-Jan-19-2026-08-13-38-PM.png'),
     'message': os.getenv(
         'FORCE_JOIN_MESSAGE',
         "**Access Locked**\n\nPlease join our **Channel** and **Group** to use this bot.\n\nAfter joining, click **Verify**."
     ),
 }
 
-# Plan selection screen image
-PLAN_IMAGE_URL = os.getenv('PLAN_IMAGE_URL', 'https://i.ibb.co/bg4ZtxrR/Chat-GPT-Image-Jan-19-2026-12-27-33-AM.png')
+# Plan-specific images (one for each plan)
+PLAN_IMAGES = {
+    'grow': os.getenv('GROW_PLAN_IMAGE', 'https://i.ibb.co/Q3yPYp6V/grow.jpg'),
+    'prime': os.getenv('PRIME_PLAN_IMAGE', 'https://i.ibb.co/3qjQpYz/prime.jpg'),
+    'dominion': os.getenv('DOMINION_PLAN_IMAGE', 'https://i.ibb.co/N2h7QpSy/dominion.jpg'),
+}
 
 # ===================== Payment Config =====================
 # Manual UPI payment (no crypto)
