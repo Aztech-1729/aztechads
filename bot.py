@@ -1,10 +1,3 @@
-# ============================================================
-# This code is licensed under @Axcne
-# Built by Axcne - All rights reserved
-# Unauthorized copying, modification, or distribution is prohibited
-# Contact: @Axcne on Telegram for licensing inquiries
-# ============================================================
-
 import os
 import asyncio
 import sys
@@ -40,6 +33,9 @@ import qrcode
 import random
 
 from config import BOT_CONFIG, FREE_TIER, PREMIUM_TIER, MESSAGES, TOPICS, INTERVAL_PRESETS, FORCE_JOIN, PLANS, PLAN_SCOUT, PLAN_IMAGES, UPI_PAYMENT
+
+# Proxies removed - using direct connection
+PROXIES = []
 import python_socks
 
 CONFIG = BOT_CONFIG
@@ -1611,24 +1607,26 @@ def account_list_keyboard(user_id, page=0):
     buttons = []
     for i, acc in enumerate(page_accounts):
         idx = start + i + 1
-        phone = acc['phone']
-        name = acc.get('name', 'Unknown')[:12]
-        status = "Active" if acc.get('is_forwarding') else "Inactive"
-        buttons.append([Button.inline(f"{status} #{idx} {phone[-4:]} - {name}", f"acc_{acc['_id']}")])
+        name = acc.get('name', 'Unknown')
+        # Add emoji based on status - Green tick for active, Red X for inactive
+        status_emoji = "✅" if acc.get('is_forwarding') else "❌"
+        status_text = "Active" if acc.get('is_forwarding') else "Inactive"
+        # Format: [Status Emoji] Status #Number - Full Name
+        buttons.append([Button.inline(f"{status_emoji} {status_text} #{idx} - {name}", f"acc_{acc['_id']}")])
     
     nav = []
     if page > 0:
-        nav.append(Button.inline("Prev", f"accpage_{page-1}"))
+        nav.append(Button.inline("⬅️ Prev", f"accpage_{page-1}"))
     if page < pages - 1:
-        nav.append(Button.inline("Next", f"accpage_{page+1}"))
+        nav.append(Button.inline("➡️ Next", f"accpage_{page+1}"))
     if nav:
         buttons.append(nav)
     
     if total >= max_accounts:
-        buttons.append([Button.inline("+ Add Account (Locked)", b"account_limit_reached"), Button.inline("Delete Account", b"delete_account_menu")])
+        buttons.append([Button.inline("➕ Add Account 🔒", b"account_limit_reached"), Button.inline("🗑️ Delete Account", b"delete_account_menu")])
     else:
-        buttons.append([Button.inline("+ Add Account", b"add_account"), Button.inline("Delete Account", b"delete_account_menu")])
-    buttons.append([Button.inline("Back", b"enter_dashboard")])
+        buttons.append([Button.inline("➕ Add Account", b"add_account"), Button.inline("🗑️ Delete Account", b"delete_account_menu")])
+    buttons.append([Button.inline("🔙 Back", b"enter_dashboard")])
     
     return buttons
 
@@ -1643,8 +1641,13 @@ def settings_menu_keyboard(uid):
     else:
         buttons.append([Button.inline("\U0001F4AC Auto Reply 🔒", b"locked_autoreply")])  # 💬🔒
     
+    # Topics - Show locked for free users
+    if is_premium(uid):
+        buttons.append([Button.inline("\U0001F4C2 Topics", b"menu_topics")])  # 📂
+    else:
+        buttons.append([Button.inline("\U0001F4C2 Topics 🔒", b"locked_topics")])  # 📂🔒
+    
     buttons.extend([
-        [Button.inline("\U0001F4C2 Topics", b"menu_topics")],        # 📂
         [Button.inline("\U0001F4DD Logs", b"menu_logs")],            # 📝
         [Button.inline("\U0001F4E3 Ads Mode", b"menu_ads_mode")],     # 📣
     ])
@@ -1794,28 +1797,28 @@ def admin_panel_keyboard():
     # Layout requested:
     # Row 1: All Users | Premium Users
     # Row 2: Full Stats | Grant Premium
-    # Row 3: Admins
+    # Row 3: Admins | Banned Users
     # Row 4: Back
     return [
-        [Button.inline("All Users", b"admin_all_users"), Button.inline("Premium Users", b"admin_premium")],
-        [Button.inline("Full Stats", b"admin_users"), Button.inline("Grant Premium", b"admin_grant_premium")],
-        [Button.inline("👨‍💼 Admins", b"admin_admins")],
-        [Button.inline("Back", b"enter_dashboard")]
+        [Button.inline("👥 All Users", b"admin_all_users"), Button.inline("💎 Premium Users", b"admin_premium")],
+        [Button.inline("📊 Full Stats", b"admin_users"), Button.inline("✅ Grant Premium", b"admin_grant_premium")],
+        [Button.inline("👨‍💼 Admins", b"admin_admins"), Button.inline("🚫 Banned Users", b"admin_banned_users")],
+        [Button.inline("🔙 Back", b"enter_dashboard")]
     ]
 
 def account_menu_keyboard(account_id, acc, user_id):
     fwd = acc.get('is_forwarding', False)
     # Start button removed per user request
-    # Only show Stop button if account is running
+    # Topics button removed per user request
+    # Stats and Delete in same row
     buttons = [
-        [Button.inline("Topics", f"topics_{account_id}"), Button.inline("Stats", f"stats_{account_id}")],
+        [Button.inline("Stats", f"stats_{account_id}"), Button.inline("Delete", f"delete_{account_id}")],
     ]
     
     if fwd:
         # Only show Stop button if account is currently running
         buttons.append([Button.inline("Stop", f"stop_{account_id}")])
     
-    buttons.append([Button.inline("Delete", f"delete_{account_id}")])
     buttons.append([Button.inline("Back", b"enter_dashboard")])
     
     return buttons
@@ -1873,7 +1876,21 @@ def otp_keyboard():
 @main_bot.on(events.NewMessage(pattern=r'^/start(?:@[\w_]+)?(?:\s|$)'))
 async def cmd_start(event):
     uid = event.sender_id
-    get_user(uid)
+    
+    # Ban check - Block banned users
+    if not is_admin(uid):
+        user = get_user(uid)
+        if user.get('banned'):
+            reason = user.get('ban_reason', 'No reason provided')
+            await event.respond(
+                f"<b>🚫 You Are Banned</b>\n\n"
+                f"<b>Reason:</b> <code>{reason}</code>\n\n"
+                f"<i>You can no longer use this bot. Contact admin if you think this is a mistake.</i>",
+                parse_mode='html'
+            )
+            return
+    else:
+        get_user(uid)
 
     # Force-join gate (admin bypass)
     if not await enforce_forcejoin_or_prompt(event):
@@ -1920,6 +1937,41 @@ async def cmd_start(event):
                 welcome_text,
                 buttons=new_welcome_keyboard()
             )
+
+# /ban command - Admin only: Ban a user with reason
+@main_bot.on(events.NewMessage(pattern=r'^/ban\s+(\d+)\s+(.+)'))
+async def cmd_ban(event):
+    if not is_admin(event.sender_id):
+        return
+    
+    target_id = int(event.pattern_match.group(1))
+    reason = event.pattern_match.group(2).strip()
+    
+    # Ban the user
+    users_col.update_one(
+        {'user_id': target_id},
+        {'$set': {
+            'banned': True,
+            'ban_reason': reason,
+            'banned_at': datetime.now(),
+            'banned_by': event.sender_id
+        }},
+        upsert=True
+    )
+    
+    # Notify the banned user
+    try:
+        await main_bot.send_message(
+            target_id,
+            f"<b>🚫 You Are Banned</b>\n\n"
+            f"<b>Reason:</b> <code>{reason}</code>\n\n"
+            f"<i>You can no longer use this bot. Contact admin if you think this is a mistake.</i>",
+            parse_mode='html'
+        )
+    except Exception:
+        pass
+    
+    await event.respond(f"✅ User {target_id} has been banned.\n\nReason: {reason}")
 
 # /access command removed - no password required anymore
 # /admin command removed per user request (use admin panel button from dashboard)
@@ -2209,6 +2261,17 @@ async def cmd_list(event):
 async def callback(event):
     uid = event.sender_id
     data = event.data.decode()
+    
+    # Ban check - Block banned users from using bot
+    if not is_admin(uid):
+        user = get_user(uid)
+        if user.get('banned'):
+            reason = user.get('ban_reason', 'No reason provided')
+            await event.answer(
+                f"🚫 You are banned!\n\nReason: {reason}",
+                alert=True
+            )
+            return
 
     # Force-join gate for interactive UI (admin bypass).
     # Allow verify button itself.
@@ -2286,27 +2349,48 @@ async def callback(event):
                 return
             
             # Show plan details with tagline + Buy Now button
-            detail_text = (
-                f"<b>{plan['emoji']} {plan['name']} Plan</b>\n\n"
-                f"<i>{plan['tagline']}</i>\n\n"
-                f"<blockquote><b>Plan Features:</b>\n\n"
-                f"💼 <b>Accounts:</b> {plan['max_accounts']}\n"
-                f"📂 <b>Topics:</b> {plan['max_topics']}\n"
-                f"👥 <b>Groups per Topic:</b> {plan['max_groups_per_topic']}\n\n"
-                f"⏱️ <b>Delays:</b>\n"
-                f"  • Message: {plan['msg_delay']}s\n"
-                # group_delay removed
-
-                f"  • Round: {plan['round_delay']}s\n\n"
-                f"✨ <b>Features:</b>\n"
-                f"  • Auto Reply: {'Yes' if plan['auto_reply_enabled'] else 'No'}\n"
-                f"  • Logs: {'Yes' if plan['logs_enabled'] else 'No'}\n"
-                + (
-                    "  • 🔄 Smart Rotation: Yes\n  • 👥 Auto Group Join: Yes"
-                    if plan_name != 'scout' else ""
-                )
-                + "</blockquote>\n\n"
-            )
+            # Build plan details text
+            detail_text = f"<b>{plan['emoji']} {plan['name']} Plan</b>\n\n"
+            detail_text += f"<i>{plan['tagline']}</i>\n\n"
+            detail_text += "<blockquote><b>Plan Features:</b>\n\n"
+            detail_text += f"💼 <b>Accounts:</b> {plan['max_accounts']}\n"
+            
+            # Topics and Groups - Only show for premium plans
+            if plan_name != 'scout':
+                detail_text += f"📂 <b>Topics:</b> {plan['max_topics']}\n"
+                detail_text += f"👥 <b>Groups per Topic:</b> {plan['max_groups_per_topic']}\n"
+            
+            detail_text += "\n⏱️ <b>Delays:</b>\n"
+            
+            # Delays display
+            if plan_name == 'scout':
+                detail_text += "  • <b>Slow, Medium, Fast presets</b>\n"
+            else:
+                detail_text += "  • <b>Custom Message & Round Delays</b>\n"
+            
+            detail_text += "\n✨ <b>Features:</b>\n"
+            
+            # Features for Scout plan
+            if plan_name == 'scout':
+                detail_text += "  • <b>⏱️ ɪɴᴛᴇʀᴠᴀʟ ᴘʀᴇꜱᴇᴛꜱ (ꜱʟᴏᴡ/ᴍᴇᴅɪᴜᴍ/ꜰᴀꜱᴛ)</b>\n"
+                detail_text += "  • <b>🔄 ʀᴇꜰʀᴇꜱʜ ᴀʟʟ ɢʀᴏᴜᴘꜱ</b>\n"
+                detail_text += "  • <b>📝 ʟᴏɢꜱ:</b> ʏᴇꜱ\n"
+                detail_text += "  • <b>📣 ᴀᴅꜱ ᴍᴏᴅᴇ ꜱᴇʟᴇᴄᴛɪᴏɴ</b>\n"
+                detail_text += "  • <b>🚫 ᴀᴜᴛᴏ ʟᴇᴀᴠᴇ ꜰᴀɪʟᴇᴅ ɢʀᴏᴜᴘꜱ</b>\n"
+            else:
+                # Features for premium plans (includes all Scout features + premium features)
+                detail_text += "  • <b>⏱️ ɪɴᴛᴇʀᴠᴀʟ ᴘʀᴇꜱᴇᴛꜱ (ꜱʟᴏᴡ/ᴍᴇᴅɪᴜᴍ/ꜰᴀꜱᴛ)</b>\n"
+                detail_text += "  • <b>🔄 ʀᴇꜰʀᴇꜱʜ ᴀʟʟ ɢʀᴏᴜᴘꜱ</b>\n"
+                detail_text += f"  • <b>📝 ʟᴏɢꜱ:</b> {'ʏᴇꜱ' if plan['logs_enabled'] else 'ɴᴏ'}\n"
+                detail_text += "  • <b>📣 ᴀᴅꜱ ᴍᴏᴅᴇ ꜱᴇʟᴇᴄᴛɪᴏɴ</b>\n"
+                detail_text += "  • <b>🚫 ᴀᴜᴛᴏ ʟᴇᴀᴠᴇ ꜰᴀɪʟᴇᴅ ɢʀᴏᴜᴘꜱ</b>\n"
+                detail_text += f"  • <b>💬 ᴀᴜᴛᴏ ʀᴇᴘʟʏ:</b> {'ʏᴇꜱ' if plan['auto_reply_enabled'] else 'ɴᴏ'}\n"
+                detail_text += "  • <b>🔄 ꜱᴍᴀʀᴛ ʀᴏᴛᴀᴛɪᴏɴ:</b> ʏᴇꜱ\n"
+                detail_text += "  • <b>👥 ᴀᴜᴛᴏ ɢʀᴏᴜᴘ ᴊᴏɪɴ:</b> ʏᴇꜱ\n"
+                detail_text += "  • <b>📂 ᴛᴏᴘɪᴄꜱ ᴍᴀɴᴀɢᴇᴍᴇɴᴛ:</b> ʏᴇꜱ\n"
+                detail_text += "  • <b>⏱️ ᴄᴜꜱᴛᴏᴍ ɪɴᴛᴇʀᴠᴀʟꜱ:</b> ʏᴇꜱ\n"
+            
+            detail_text += "</blockquote>\n\n"
             
             if plan_name == "scout":
                 # Free plan - Show "Activate Free" or "Active" button
@@ -2878,10 +2962,14 @@ async def callback(event):
             return
         
         if data == "menu_account":
+            # Clear any pending account adding state when returning to account menu
+            if uid in user_states:
+                del user_states[uid]
+            
             accounts = get_user_accounts(uid)
             max_acc = get_user_max_accounts(uid)
             text = (
-                f"<b>👤 Account Management</b>\n\n"
+                f"<b>📱 Account Management</b>\n\n"
                 f"<b>Accounts:</b> <code>{len(accounts)}/{max_acc}</code>\n\n"
                 f"<i>Select an account below or add a new one.</i>"
             )
@@ -3001,6 +3089,220 @@ async def callback(event):
             await event.edit(text, parse_mode='html', buttons=[[Button.inline("← Back", b"enter_dashboard")]])
             return
         
+        if data == "admin_banned_users" or data.startswith("banned_page_"):
+            if not is_admin(uid):
+                return
+            
+            # Pagination for banned users
+            page = 0
+            if data.startswith("banned_page_"):
+                page = int(data.split("_")[2])
+            
+            per_page = 5
+            skip = page * per_page
+            
+            # Get banned users
+            banned_users = list(users_col.find({'banned': True}).skip(skip).limit(per_page))
+            total_banned = users_col.count_documents({'banned': True})
+            
+            if total_banned == 0:
+                await event.edit(
+                    "<b>🚫 Banned Users</b>\n\n"
+                    "<i>No banned users found.</i>",
+                    parse_mode='html',
+                    buttons=[[Button.inline("← Back", b"admin_panel")]]
+                )
+                return
+            
+            pages = (total_banned + per_page - 1) // per_page
+            
+            text = (
+                f"<b>🚫 Banned Users</b>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                f"<b>Total Banned:</b> <code>{total_banned}</code>\n"
+                f"<b>Current Page:</b> <code>{page + 1}/{pages}</code>\n\n"
+                "<b>💡 How to Ban a User:</b>\n"
+                "<code>/ban [user_id] [reason]</code>\n\n"
+                "<b>📌 Example:</b>\n"
+                "<code>/ban 123456789 spam</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
+            )
+            
+            buttons = []
+            for user in banned_users:
+                user_id = user['user_id']
+                reason = user.get('ban_reason', 'No reason')[:20]
+                buttons.append([Button.inline(f"🚫 User {user_id} - {reason}", f"banned_user_{user_id}")])
+            
+            # Pagination
+            nav = []
+            if page > 0:
+                nav.append(Button.inline("⬅️ Prev", f"banned_page_{page-1}"))
+            if page < pages - 1:
+                nav.append(Button.inline("➡️ Next", f"banned_page_{page+1}"))
+            if nav:
+                buttons.append(nav)
+            
+            buttons.append([Button.inline("← Back", b"admin_panel")])
+            
+            await event.edit(text, parse_mode='html', buttons=buttons)
+            return
+        
+        if data.startswith("banned_user_"):
+            if not is_admin(uid):
+                return
+            
+            target_id = int(data.split("_")[2])
+            user = users_col.find_one({'user_id': target_id})
+            
+            if not user or not user.get('banned'):
+                await event.answer("User not found or not banned!", alert=True)
+                return
+            
+            reason = user.get('ban_reason', 'No reason provided')
+            banned_at = user.get('banned_at')
+            banned_date = banned_at.strftime('%d %b %Y %H:%M') if banned_at else 'Unknown'
+            
+            text = (
+                "<b>🚫 Banned User Details</b>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                f"<b>User ID:</b> <code>{target_id}</code>\n"
+                f"<b>Ban Reason:</b> <code>{reason}</code>\n"
+                f"<b>Banned On:</b> <code>{banned_date}</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
+            )
+            
+            buttons = [
+                [Button.inline("✅ Unban User", f"unban_{target_id}")],
+                [Button.inline("← Back", b"admin_banned_users")]
+            ]
+            
+            await event.edit(text, parse_mode='html', buttons=buttons)
+            return
+        
+        if data.startswith("unban_"):
+            if not is_admin(uid):
+                return
+            
+            target_id = int(data.split("_")[1])
+            
+            # Unban the user
+            users_col.update_one(
+                {'user_id': target_id},
+                {'$set': {
+                    'banned': False,
+                    'unbanned_at': datetime.now(),
+                    'unbanned_by': uid
+                }}
+            )
+            
+            # Notify the user
+            try:
+                await main_bot.send_message(
+                    target_id,
+                    "<b>✅ You Have Been Unbanned!</b>\n\n"
+                    "<i>You can now use the bot again. Welcome back!</i>",
+                    parse_mode='html'
+                )
+            except Exception:
+                pass
+            
+            await event.answer("User has been unbanned!", alert=True)
+            
+            # Return to banned users list
+            await event.edit(
+                "<b>🚫 Banned Users</b>\n\n"
+                "<i>User has been unbanned successfully!</i>",
+                parse_mode='html',
+                buttons=[[Button.inline("← Back to List", b"admin_banned_users")], [Button.inline("← Admin Panel", b"admin_panel")]]
+            )
+            return
+        
+        if data.startswith("admin_reset_user_"):
+            if not is_admin(uid):
+                return
+            
+            target_id = int(data.split("_")[3])
+            
+            # Get all user's accounts
+            accounts = get_user_accounts(target_id)
+            accounts_deleted = 0
+            tasks_stopped = 0
+            
+            # Stop all running tasks and delete accounts
+            for acc in accounts:
+                account_id = str(acc['_id'])
+                
+                # Stop forwarding task if running
+                if account_id in forwarding_tasks:
+                    try:
+                        forwarding_tasks[account_id].cancel()
+                        del forwarding_tasks[account_id]
+                        tasks_stopped += 1
+                    except Exception:
+                        pass
+                
+                # Stop auto reply if running
+                if account_id in auto_reply_clients:
+                    try:
+                        await auto_reply_clients[account_id].disconnect()
+                        del auto_reply_clients[account_id]
+                    except Exception:
+                        pass
+                
+                # Delete account data
+                accounts_col.delete_one({'_id': acc['_id']})
+                account_topics_col.delete_many({'account_id': account_id})
+                account_auto_groups_col.delete_many({'account_id': account_id})
+                account_failed_groups_col.delete_many({'account_id': account_id})
+                account_stats_col.delete_one({'account_id': account_id})
+                accounts_deleted += 1
+            
+            # Reset user to free plan
+            users_col.update_one(
+                {'user_id': target_id},
+                {'$set': {
+                    'tier': 'free',
+                    'plan': 'scout',
+                    'plan_name': 'Scout',
+                    'max_accounts': 1,
+                    'premium_expires_at': None,
+                    'plan_expiry': None,
+                    'approved': True
+                }}
+            )
+            
+            # Notify the user
+            try:
+                await main_bot.send_message(
+                    target_id,
+                    "<b>🔄 Account Reset</b>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    f"<b>Accounts Deleted:</b> <code>{accounts_deleted}</code>\n"
+                    f"<b>Tasks Stopped:</b> <code>{tasks_stopped}</code>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    "<i>Your account has been reset by admin. All data cleared and plan reset to Scout (Free).</i>",
+                    parse_mode='html'
+                )
+            except Exception:
+                pass
+            
+            await event.answer(f"User {target_id} has been reset!", alert=True)
+            
+            # Show confirmation
+            await event.edit(
+                "<b>✅ User Reset Complete</b>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                f"<b>User ID:</b> <code>{target_id}</code>\n"
+                f"<b>Accounts Deleted:</b> <code>{accounts_deleted}</code>\n"
+                f"<b>Tasks Stopped:</b> <code>{tasks_stopped}</code>\n"
+                f"<b>Plan Reset:</b> <code>Scout (Free)</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>",
+                parse_mode='html',
+                buttons=[[Button.inline("← Back to Users", b"admin_all_users")], [Button.inline("← Admin Panel", b"admin_panel")]]
+            )
+            return
+        
         if data == "my_profile":
             user = get_user(uid)
             
@@ -3035,7 +3337,8 @@ async def callback(event):
                 # Get actual feature status from user settings (not hardcoded for admins)
                 auto_reply = "✅ Enabled" if user.get('auto_reply_enabled') else "❌ Disabled"
                 smart_rotation = "✅ Enabled" if user.get('smart_rotation_enabled') else "❌ Disabled"
-                logs = "✅ Enabled" if user.get('logs_enabled') else "❌ Disabled"
+                # Logs are enabled if logs_chat_id is set
+                logs = "✅ Enabled" if user.get('logs_chat_id') else "❌ Disabled"
                 
                 try:
                     username = f"@{event.sender.username}" if event.sender.username else "Not set"
@@ -3118,7 +3421,8 @@ async def callback(event):
                 # Fix: Check actual user settings, not just premium status
                 auto_reply = "✅ Enabled" if user.get('auto_reply_enabled') else "❌ Disabled"
                 smart_rotation = "✅ Enabled" if user.get('smart_rotation_enabled') else "❌ Disabled"
-                logs = "✅ Enabled" if user.get('logs_enabled') else "❌ Disabled"
+                # Logs are enabled if logs_chat_id is set
+                logs = "✅ Enabled" if user.get('logs_chat_id') else "❌ Disabled"
                 
                 # Get username
                 try:
@@ -3224,7 +3528,7 @@ async def callback(event):
                 return
             user_states[uid] = {'action': 'custom_interval', 'step': 'msg_delay'}
             await event.edit(
-                "⏱️ Custom Interval\n\nEnter message delay in seconds (5-9999):",
+                "⏱️ Custom Interval\n\nEnter message delay in seconds (1-9999):",
                 buttons=[[Button.inline("← Back", b"menu_interval")]]
             )
             return
@@ -3353,11 +3657,20 @@ async def callback(event):
             return
         
         # Locked premium-only buttons in Settings menu
-        if data in {"locked_smart_rotation", "locked_auto_group_join", "locked_autoreply"}:
+        if data in {"locked_smart_rotation", "locked_auto_group_join", "locked_autoreply", "locked_topics"}:
             await event.edit(
                 "<b>🔒 Premium Feature</b>\n\n<blockquote>Purchase Premium to unlock this feature.</blockquote>",
                 parse_mode='html',
                 buttons=[[Button.inline("💎 View Plans", b"back_plans")], [Button.inline("← Back", b"menu_settings")]]
+            )
+            return
+        
+        # Locked forwarding mode options (Topics Only and Both)
+        if data == "locked_fwd_mode":
+            await event.edit(
+                "<b>🔒 Premium Feature</b>\n\n<blockquote>Purchase Premium to unlock this forwarding mode.</blockquote>",
+                parse_mode='html',
+                buttons=[[Button.inline("💎 View Plans", b"back_plans")], [Button.inline("← Back", b"menu_fwd_mode")]]
             )
             return
 
@@ -3478,12 +3791,15 @@ async def callback(event):
             
             text = (
                 "<b>⚙️ Settings</b>\n\n"
-                f"<b>📣 Ads Mode:</b> <code>{ads_mode}</code>\n\n"
-                f"<b>💬 Auto-Reply:</b> <code>{auto_reply_status}</code>\n\n"
-                f"<b>⏱️ Interval:</b> <code>{interval_display}</code>\n\n"
-                f"<b>🔄 Smart Rotation:</b> <code>{rotation_status}</code>\n\n"
-                f"<b>📝 Logs:</b> <code>{logs_status}</code>\n\n"
-                f"<b>🚪 Auto Leave Failed:</b> <code>{leave_status}</code>"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                "<b>📋 Current Configuration:</b>\n"
+                f"├ <b>📣 Ads Mode:</b> <code>{ads_mode}</code>\n"
+                f"├ <b>💬 Auto-Reply:</b> <code>{auto_reply_status}</code>\n"
+                f"├ <b>⏱️ Interval:</b> <code>{interval_display}</code>\n"
+                f"├ <b>🔄 Smart Rotation:</b> <code>{rotation_status}</code>\n"
+                f"├ <b>📝 Logs:</b> <code>{logs_status}</code>\n"
+                f"└ <b>🚫 Auto Leave Failed:</b> <code>{leave_status}</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
             )
             await event.edit(text, parse_mode='html', buttons=settings_menu_keyboard(uid))
             return
@@ -3926,7 +4242,9 @@ async def callback(event):
 
         if data == "menu_fwd_mode":
             user = get_user(uid)
-            current = user.get('forwarding_mode', 'topics')
+            current = user.get('forwarding_mode', 'auto')  # Free users default to Groups Only
+            user_is_premium = is_premium(uid)
+            
             modes = {
                 'topics': 'Forward to Topics Only',
                 'auto': 'Forward to Groups Only',
@@ -3938,10 +4256,19 @@ async def callback(event):
                 "<blockquote>Select how ads should be forwarded.</blockquote>"
             )
             
+            if not user_is_premium:
+                text += "\n\n<i>💡 Free users can only forward to Groups. Upgrade for more options!</i>"
+            
             buttons = []
             for mode, label in modes.items():
                 mark = " ✅" if mode == current else ""
-                buttons.append([Button.inline(f"{label}{mark}", f"set_fwd_mode_{mode}")])
+                
+                # Lock topics and both for free users
+                if not user_is_premium and mode in ['topics', 'both']:
+                    buttons.append([Button.inline(f"{label} 🔒", b"locked_fwd_mode")])
+                else:
+                    buttons.append([Button.inline(f"{label}{mark}", f"set_fwd_mode_{mode}")])
+            
             buttons.append([Button.inline("← Back", b"enter_dashboard")])
             
             await event.edit(text, parse_mode='html', buttons=buttons)
@@ -4373,6 +4700,9 @@ async def callback(event):
                     buttons.append([Button.inline("✅ Grant Premium", f"admin_grant_premium_{target_id}")])
                 else:
                     buttons.append([Button.inline("❌ Revoke Premium", f"admin_revoke_premium_{target_id}")])
+                
+                # Add Reset button for non-admin users
+                buttons.append([Button.inline("\U0001F504 Reset User", f"admin_reset_user_{target_id}")])
             
             # Back button routing based on source list
             if user_detail_source == 'all':
@@ -5600,8 +5930,8 @@ async def text_handler(event):
             return
         
         if step == 'msg_delay':
-            if val < 5 or val > 9999:
-                await event.respond("Enter a value between 5-9999:")
+            if val < 1 or val > 9999:
+                await event.respond("Enter a value between 1-9999:")
                 return
             user_states[uid]['msg_delay'] = val
             user_states[uid]['step'] = 'round_delay'
