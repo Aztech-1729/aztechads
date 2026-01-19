@@ -1,8 +1,8 @@
 import os
 
 BOT_CONFIG = {
-    'api_id': int(os.getenv('TELEGRAM_API_ID', '33388685')),
-    'api_hash': os.getenv('TELEGRAM_API_HASH', '8a39446c6f69527dbfbb8e0e6c6a146f'),
+    'api_id': int(os.getenv('TELEGRAM_API_ID', '36570856')),
+    'api_hash': os.getenv('TELEGRAM_API_HASH', 'b7057ccac004db1d1bb9b5c5220e7f9d'),
     'bot_token': os.getenv('BOT_TOKEN', '8407662292:AAFWtt2AFyLu1NK25n5SN_AdaTujhVmH8-w'),
     'owner_id': int(os.getenv('OWNER_ID', '6670166083')),
     'mongo_uri': os.getenv('MONGO_URI', 'mongodb+srv://aztech:ayazahmed1122@cluster0.mhuaw3q.mongodb.net/aztechads_db?retryWrites=true&w=majority'),
