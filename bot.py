@@ -39,7 +39,7 @@ import requests
 import qrcode
 import random
 
-from config import BOT_CONFIG, FREE_TIER, PREMIUM_TIER, MESSAGES, ADMIN_SETTINGS, TOPICS, INTERVAL_PRESETS, PROXIES, FORCE_JOIN, PLANS, PLAN_SCOUT, PLAN_IMAGES, UPI_PAYMENT
+from config import BOT_CONFIG, FREE_TIER, PREMIUM_TIER, MESSAGES, TOPICS, INTERVAL_PRESETS, FORCE_JOIN, PLANS, PLAN_SCOUT, PLAN_IMAGES, UPI_PAYMENT
 import python_socks
 
 CONFIG = BOT_CONFIG
@@ -1921,19 +1921,8 @@ async def cmd_start(event):
                 buttons=new_welcome_keyboard()
             )
 
-@main_bot.on(events.NewMessage(pattern=r'^/access(?:@[\w_]+)?\s+(.+)$'))
-async def cmd_access(event):
-    uid = event.sender_id
-    pwd = event.pattern_match.group(1).strip()
-    
-    if pwd == CONFIG['access_password'] or is_admin(uid):
-        approve_user(uid)
-        await event.respond("Access granted!", buttons=new_welcome_keyboard())
-    else:
-        await event.respond("Wrong password!")
-
+# /access command removed - no password required anymore
 # /admin command removed per user request (use admin panel button from dashboard)
-
 # /help command removed per user request
 
 @main_bot.on(events.NewMessage(pattern=r'^/rmprm(?:@[\w_]+)?\s+(\d+)$'))
@@ -2488,13 +2477,13 @@ async def callback(event):
             
             # Edit admin message
             try:
-                msg = event.query.message if hasattr(event, 'query') else None
-                if msg:
-                    await event.edit(
-                        msg.text + "\n\n<b>✅ APPROVED by admin</b>",
-                        parse_mode='html',
-                        buttons=None
-                    )
+                # Get original message text and add approval status
+                original_text = event.query.message.text if hasattr(event, 'query') and hasattr(event.query, 'message') else "Payment Screenshot"
+                await event.edit(
+                    original_text + "\n\n<b>✅ APPROVED by admin</b>",
+                    parse_mode='html',
+                    buttons=None
+                )
             except Exception as e:
                 print(f"[PAYMENT] Failed to edit admin message: {e}")
             
@@ -2502,8 +2491,14 @@ async def callback(event):
             
             # Clean up
             del pending_upi_payments[request_id]
-            if msg and msg.id in admin_payment_message_map:
-                del admin_payment_message_map[msg.id]
+            # Remove from message map if exists (message ID comes from event.query.message)
+            try:
+                if hasattr(event, 'query') and hasattr(event.query, 'message'):
+                    message_id = event.query.message.id
+                    if message_id in admin_payment_message_map:
+                        del admin_payment_message_map[message_id]
+            except Exception:
+                pass
             return
         
         elif data.startswith("payreject_"):
@@ -2536,13 +2531,13 @@ async def callback(event):
             
             # Edit admin message
             try:
-                msg = event.query.message if hasattr(event, 'query') else None
-                if msg:
-                    await event.edit(
-                        msg.text + "\n\n<b>❌ REJECTED by admin</b>",
-                        parse_mode='html',
-                        buttons=None
-                    )
+                # Get original message text and add rejection status
+                original_text = event.query.message.text if hasattr(event, 'query') and hasattr(event.query, 'message') else "Payment Screenshot"
+                await event.edit(
+                    original_text + "\n\n<b>❌ REJECTED by admin</b>",
+                    parse_mode='html',
+                    buttons=None
+                )
             except Exception as e:
                 print(f"[PAYMENT] Failed to edit admin message: {e}")
             
@@ -2550,8 +2545,14 @@ async def callback(event):
             
             # Clean up
             del pending_upi_payments[request_id]
-            if msg and msg.id in admin_payment_message_map:
-                del admin_payment_message_map[msg.id]
+            # Remove from message map if exists (message ID comes from event.query.message)
+            try:
+                if hasattr(event, 'query') and hasattr(event.query, 'message'):
+                    message_id = event.query.message.id
+                    if message_id in admin_payment_message_map:
+                        del admin_payment_message_map[message_id]
+            except Exception:
+                pass
             return
         
         if data.startswith("buy_"):
