@@ -961,7 +961,31 @@ async def run_forwarding_loop(user_id, account_id):
                 
                 # Round start log so user can confirm next round started
                 try:
-                    await send_log(account_id, f"Starting round\nMode: {fwd_mode}\nAds mode: {ads_mode}")
+                    # Get user settings for display
+                    user_doc = get_user(user_id)
+                    
+                    # Fix mode display to show user-friendly text
+                    if fwd_mode == 'topics':
+                        mode_display = "Topics Only"
+                    elif fwd_mode == 'auto':
+                        mode_display = "Groups Only"
+                    elif fwd_mode == 'both':
+                        mode_display = "Topics & Groups"
+                    else:
+                        mode_display = fwd_mode.capitalize()
+                    
+                    # Get auto leave and auto reply status
+                    auto_leave = "✅ ON" if user_doc.get('auto_leave_groups', True) else "❌ OFF"
+                    auto_reply = "✅ ON" if user_doc.get('auto_reply_enabled', False) else "❌ OFF"
+                    
+                    log_msg = (
+                        f"<b>🔄 Starting Round</b>\n\n"
+                        f"<b>Mode:</b> <code>{mode_display}</code>\n"
+                        f"<b>Ads Mode:</b> <code>{ads_mode.upper()}</code>\n"
+                        f"<b>Auto Leave:</b> {auto_leave}\n"
+                        f"<b>Auto Reply:</b> {auto_reply}"
+                    )
+                    await send_log(account_id, log_msg)
                 except Exception:
                     pass
 
@@ -2438,16 +2462,27 @@ async def callback(event):
             # Update payment status
             pay_req['status'] = 'approved'
             
-            # Notify user
+            # Notify user with plan-specific image
             try:
-                await main_bot.send_message(
-                    target_uid,
-                    f"<b>✅ Payment Approved</b>\n\n"
-                    f"<b>Plan:</b> {plan['emoji']} {plan['name']}\n"
-                    f"<b>Duration:</b> 30 days\n\n"
-                    f"Your premium features are now active! 🎉",
-                    parse_mode='html'
+                plan_image = PLAN_IMAGES.get(plan_key)
+                notify_text = (
+                    "<b>🎉 Premium Activated!</b>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    f"<b>Your Plan:</b> {plan['emoji']} <b>{plan['name']}</b>\n"
+                    f"<b>Max Accounts:</b> <code>{plan['max_accounts']}</code>\n"
+                    f"<b>Duration:</b> <code>30 days</code>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    f"<b>✅ Payment Approved!</b>\n\n"
+                    "<i>Your premium plan has been activated! Enjoy all features.</i>"
                 )
+                notify_buttons = [
+                    [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
+                ]
+                
+                if plan_image and plan_key in ['grow', 'prime', 'dominion']:
+                    await main_bot.send_file(target_uid, plan_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
+                else:
+                    await main_bot.send_message(target_uid, notify_text, parse_mode='html', buttons=notify_buttons)
             except Exception as e:
                 print(f"[PAYMENT] Failed to notify user {target_uid}: {e}")
             
@@ -2623,30 +2658,32 @@ async def callback(event):
                 failed_topics = account_failed_groups_col.count_documents({})
                 
                 text = (
-                    f"<b>🖥️ SYSTEM STATS</b>\n\n"
-                    f"<b>CPU:</b> <code>{cpu_pct:.0f}%</code>\n"
-                    f"<b>RAM:</b> <code>{mem.percent:.0f}%</code> <i>({mem.used//(1024**3)}GB/{mem.total//(1024**3)}GB)</i>\n"
-                    f"<b>DISK:</b> <code>{disk.percent:.0f}%</code> <i>({disk.used//(1024**3)}GB/{disk.total//(1024**3)}GB)</i>\n\n"
-                    f"<b>👥 USERS:</b>\n"
-                    f"<code>├ Total: {total_users}\n"
-                    f"├ Subscribers: {premium_users}\n"
-                    f"├ New Today: {new_today}\n"
-                    f"└ Banned: {banned_users}</code>\n\n"
-                    f"<b>✦ PREMIUM BY PLAN:</b>\n"
-                    f"<code>├ Grow: {grow_count}\n"
-                    f"├ Prime: {prime_count}\n"
-                    f"└ Dominion: {dominion_count}</code>\n\n"
-                    f"<b>📱 ACCOUNTS:</b>\n"
-                    f"<code>├ Total: {total_accounts}\n"
-                    f"└ Active Broadcasts: {active_broadcasts}</code>\n\n"
-                    f"<b>💬 MESSAGING:</b>\n"
-                    f"<code>├ Total Ads Sent: {total_ads_sent}\n"
-                    f"├ Auto-Replies: {auto_replies}\n"
-                    f"└ Target Groups: {target_groups}</code>\n\n"
-                    f"<b>📂 TOPICS:</b>\n"
-                    f"<code>├ Total: {total_topics}\n"
-                    f"├ Active: {active_topics}\n"
-                    f"└ Failed: {failed_topics}</code>"
+                    "<b>📊 Full Statistics</b>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    "<b>💻 System Performance:</b>\n"
+                    f"├ <b>CPU:</b> <code>{cpu_pct:.0f}%</code>\n"
+                    f"├ <b>RAM:</b> <code>{mem.percent:.0f}%</code> ({mem.used//(1024**3)}GB / {mem.total//(1024**3)}GB)\n"
+                    f"└ <b>Disk:</b> <code>{disk.percent:.0f}%</code> ({disk.used//(1024**3)}GB / {disk.total//(1024**3)}GB)\n\n"
+                    "<b>👥 User Statistics:</b>\n"
+                    f"├ <b>Total Users:</b> <code>{total_users}</code> <i>(+{new_today} today)</i>\n"
+                    f"├ <b>💎 Premium Users:</b> <code>{premium_users}</code>\n"
+                    f"└ <b>🚫 Banned Users:</b> <code>{banned_users}</code>\n\n"
+                    "<b>💎 Premium by Plan:</b>\n"
+                    f"├ <b>📈 Grow:</b> <code>{grow_count}</code>\n"
+                    f"├ <b>⭐ Prime:</b> <code>{prime_count}</code>\n"
+                    f"└ <b>👑 Dominion:</b> <code>{dominion_count}</code>\n\n"
+                    "<b>📱 Account Statistics:</b>\n"
+                    f"├ <b>Total Accounts:</b> <code>{total_accounts}</code>\n"
+                    f"└ <b>▶️ Active Broadcasts:</b> <code>{active_broadcasts}</code>\n\n"
+                    "<b>📈 Messaging Statistics:</b>\n"
+                    f"├ <b>✅ Total Ads Sent:</b> <code>{total_ads_sent}</code>\n"
+                    f"├ <b>💬 Auto Replies:</b> <code>{auto_replies}</code>\n"
+                    f"└ <b>🎯 Target Groups:</b> <code>{target_groups}</code>\n\n"
+                    "<b>📂 Topic Statistics:</b>\n"
+                    f"├ <b>Total Topics:</b> <code>{total_topics}</code>\n"
+                    f"├ <b>Active Topics:</b> <code>{active_topics}</code>\n"
+                    f"└ <b>❌ Failed Topics:</b> <code>{failed_topics}</code>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
                 )
                 
                 await event.edit(text, parse_mode='html', buttons=[[Button.inline("← Back", b"back_admin")]])
@@ -2659,13 +2696,16 @@ async def callback(event):
                 disk = psutil.disk_usage('/')
                 
                 text = (
-                    f"**System Stats**\n\n"
-                    f"CPU: {cpu}%\n"
-                    f"RAM: {ram.percent}% ({ram.used // (1024**3)}GB / {ram.total // (1024**3)}GB)\n"
-                    f"Disk: {disk.percent}% ({disk.used // (1024**3)}GB / {disk.total // (1024**3)}GB)\n"
+                    "<b>💻 System Statistics</b>\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    "<b>⚡ Performance:</b>\n"
+                    f"├ <b>CPU Usage:</b> <code>{cpu}%</code>\n"
+                    f"├ <b>RAM Usage:</b> <code>{ram.percent}%</code> ({ram.used // (1024**3)}GB / {ram.total // (1024**3)}GB)\n"
+                    f"└ <b>Disk Usage:</b> <code>{disk.percent}%</code> ({disk.used // (1024**3)}GB / {disk.total // (1024**3)}GB)\n\n"
+                    "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
                 )
                 
-                await event.edit(text, buttons=[[Button.inline("🏠 Back", b"back_admin")]])
+                await event.edit(text, parse_mode='html', buttons=[[Button.inline("← Back", b"back_admin")]])
                 return
             
             if data == "admin_controls":
@@ -2730,16 +2770,24 @@ async def callback(event):
             plan_name = plan_id.replace('plan_', '').capitalize()
             set_user_premium(target_uid, plan['max_accounts'], plan_name)
             
-            # Notify target user
+            # Notify target user with plan-specific image
             try:
-                await main_bot.send_message(
-                    target_uid,
-                    f"**Premium Activated**\n\n"
-                    f"Plan: {plan['name']}\n"
-                    f"Accounts: {plan['max_accounts']}\n\n"
-                    f"Your premium plan has been activated by admin!\n"
-                    f"Enjoy all features."
+                notification_text = (
+                    f"<b>🎉 Premium Activated!</b>\n\n"
+                    f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    f"<b>Your Plan:</b> {plan['emoji']} <b>{plan['name']}</b>\n"
+                    f"<b>Max Accounts:</b> <code>{plan['max_accounts']}</code>\n"
+                    f"<b>Duration:</b> <code>30 days</code>\n\n"
+                    f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    f"<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
                 )
+                
+                # Get plan-specific image from PLAN_IMAGES
+                plan_image = PLAN_IMAGES.get(plan_name)
+                if plan_image and plan_name in ['grow', 'prime', 'dominion']:
+                    await main_bot.send_file(target_uid, plan_image, caption=notification_text, parse_mode='html')
+                else:
+                    await main_bot.send_message(target_uid, notification_text, parse_mode='html')
             except:
                 pass
             
@@ -3017,12 +3065,21 @@ async def callback(event):
                 )
             else:
                 # Regular User Display
-                plan_key = user.get('plan', 'scout')
-                plan = PLANS.get(plan_key, PLAN_SCOUT)
+                # Check if user still has active premium
+                user_is_premium = is_premium(uid)
+                
+                if user_is_premium:
+                    # User has active premium - show their plan
+                    plan_key = user.get('plan', 'scout')
+                    plan = PLANS.get(plan_key, PLAN_SCOUT)
+                else:
+                    # Premium expired or revoked - reset to Scout
+                    plan_key = 'scout'
+                    plan = PLAN_SCOUT
                 
                 # Calculate expiry and days remaining
                 expiry_date = user.get('plan_expiry')
-                if expiry_date:
+                if expiry_date and user_is_premium:
                     days_remaining = (expiry_date - datetime.now()).days
                     expiry_str = expiry_date.strftime('%d %b %Y')
                     days_str = f"{days_remaining} days" if days_remaining > 0 else "Expired"
@@ -3996,11 +4053,29 @@ async def callback(event):
             stopped = 0
             for acc in accounts:
                 if acc.get('is_forwarding'):
+                    account_id_str = str(acc['_id'])
                     accounts_col.update_one({'_id': acc['_id']}, {'$set': {'is_forwarding': False}})
                     if acc['_id'] in forwarding_tasks:
                         forwarding_tasks[acc['_id']].cancel()
                         del forwarding_tasks[acc['_id']]
                     stopped += 1
+            
+            # Send log message to user (once for all stopped accounts)
+            if stopped > 0:
+                try:
+                    user_doc = get_user(uid)
+                    logs_chat_id = user_doc.get('logs_chat_id')
+                    if logs_chat_id and CONFIG.get('logger_bot_token'):
+                        log_msg = (
+                            f"<b>⏹️ Ads Stopped</b>\n\n"
+                            f"<b>Accounts Stopped:</b> <code>{stopped}</code>\n\n"
+                            f"<i>Advertising has been stopped by user.</i>"
+                        )
+                        await logger_bot.send_message(int(logs_chat_id), log_msg, parse_mode='html')
+                        print(f"[STOP] Stop log sent to user {uid}")
+                except Exception as e:
+                    print(f"[LOG ERROR] Failed to send stop log to user {uid}: {e}")
+            
             await event.answer(f"Stopped {stopped} accounts!", alert=True)
             
             text = render_dashboard_text(uid)
@@ -4057,13 +4132,16 @@ async def callback(event):
             new_today = users_col.count_documents({'created_at': {'$gte': today_start}})
             
             text = (
-                "<b>👑 Admin Panel</b>\n\n"
-                f"<b>Total Users:</b> <code>{total_users}</code> <i>(+{new_today} today)</i>\n"
-                f"<b>Premium Users:</b> <code>{premium_users}</code>\n"
-                f"<b>Total Admins:</b> <code>{total_admins}</code>\n\n"
-                f"<b>Total Accounts:</b> <code>{total_accounts}</code>\n"
-                f"<b>Active Forwarding:</b> <code>{active}</code>\n\n"
-                "<i>Use buttons below to manage bot.</i>"
+                "<b>⚙️ Admin Panel</b>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                "<b>👥 User Statistics:</b>\n"
+                f"├ <b>Total Users:</b> <code>{total_users}</code> <i>(+{new_today} today)</i>\n"
+                f"├ <b>💎 Premium Users:</b> <code>{premium_users}</code>\n"
+                f"└ <b>👨‍💼 Total Admins:</b> <code>{total_admins}</code>\n\n"
+                "<b>📱 Account Statistics:</b>\n"
+                f"├ <b>Total Accounts:</b> <code>{total_accounts}</code>\n"
+                f"└ <b>▶️ Active Forwarding:</b> <code>{active}</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
             )
             
             await event.edit(text, parse_mode='html', buttons=admin_panel_keyboard())
@@ -4246,9 +4324,13 @@ async def callback(event):
             created_str = created_at.strftime('%Y-%m-%d %H:%M') if hasattr(created_at, 'strftime') else str(created_at)
             
             # Show plan name and expiry instead of tier
-            if is_admin(target_id):
-                plan_display = "Admin"
-                expiry_display = "999d"
+            # Check if target user is admin
+            is_target_admin = is_admin(target_id)
+            
+            if is_target_admin:
+                plan_display = "⚡ God Mode"
+                expiry_display = "∞"
+                max_acc = 999  # Admins have unlimited accounts
             elif tier == 'premium':
                 plan_name = user.get('plan_name', 'Premium')
                 expires_at = user.get('premium_expires_at')
@@ -4266,21 +4348,30 @@ async def callback(event):
                 expiry_display = "∞"
             
             text = (
-                f"<b>👤 User Profile</b>\n\n"
-                f"<b>ID:</b> <code>{target_id}</code>\n"
-                f"<b>Plan:</b> <code>{plan_display}</code>\n"
-                f"<b>Expiry:</b> <code>{expiry_display}</code>\n"
-                f"<b>Approved:</b> {'✅' if approved else '❌'}\n"
-                f"<b>Max Accounts:</b> <code>{max_acc}</code>\n"
-                f"<b>Accounts:</b> <code>{len(accounts)}</code> <i>(active: {active})</i>\n"
-                f"<b>Created:</b> <code>{created_str}</code>"
+                "<b>👤 User Profile</b>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                "<b>📋 User Information:</b>\n"
+                f"├ <b>User ID:</b> <code>{target_id}</code>\n"
+                f"├ <b>Plan:</b> <code>{plan_display}</code>\n"
+                f"├ <b>Expiry:</b> <code>{expiry_display}</code>\n"
+                f"└ <b>Approved:</b> {'✅ Yes' if approved else '❌ No'}\n\n"
+                "<b>📱 Account Statistics:</b>\n"
+                f"├ <b>Max Accounts:</b> <code>{max_acc}</code>\n"
+                f"├ <b>Total Accounts:</b> <code>{len(accounts)}</code>\n"
+                f"└ <b>▶️ Active Now:</b> <code>{active}</code>\n\n"
+                "<b>⏰ Account Activity:</b>\n"
+                f"└ <b>Joined:</b> <code>{created_str}</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
             )
             
             buttons = []
-            if tier != 'premium':
-                buttons.append([Button.inline("✅ Grant Premium", f"admin_grant_premium_{target_id}")])
-            else:
-                buttons.append([Button.inline("❌ Revoke Premium", f"admin_revoke_premium_{target_id}")])
+            
+            # Don't show Grant/Revoke Premium buttons for admins
+            if not is_target_admin:
+                if tier != 'premium':
+                    buttons.append([Button.inline("✅ Grant Premium", f"admin_grant_premium_{target_id}")])
+                else:
+                    buttons.append([Button.inline("❌ Revoke Premium", f"admin_revoke_premium_{target_id}")])
             
             # Back button routing based on source list
             if user_detail_source == 'all':
@@ -4382,30 +4473,35 @@ async def callback(event):
                 {'user_id': target_id},
                 {'$set': {
                     'tier': 'premium',
+                    'plan': 'grow',  # Store plan key for profile display
                     'plan_name': plan['name'],
                     'max_accounts': plan['max_accounts'],
+                    'premium_granted_at': datetime.now(),
                     'premium_expires_at': expires_at,
+                    'plan_expiry': expires_at,  # Store for profile display
                     'approved': True
                 }},
                 upsert=True
             )
             
-            # Send notification to user
-            welcome_image = MESSAGES.get('welcome_image', '')
+            # Send notification to user with plan-specific image
+            grow_image = PLAN_IMAGES.get('grow')
             notify_text = (
-                "<b>🎉 Plan Activated!</b>\n\n"
-                "<b>Plan:</b> Grow\n"
-                "<b>Accounts:</b> 3\n"
-                "<b>Validity:</b> 30 days\n\n"
-                "<i>Your premium features are now active!</i>"
+                "<b>🎉 Premium Activated!</b>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                "<b>Your Plan:</b> 📈 <b>Grow</b>\n"
+                "<b>Max Accounts:</b> <code>3</code>\n"
+                "<b>Duration:</b> <code>30 days</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                "<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
             )
             notify_buttons = [
                 [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
             ]
             
             try:
-                if welcome_image:
-                    await main_bot.send_file(target_id, welcome_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
+                if grow_image:
+                    await main_bot.send_file(target_id, grow_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
                 else:
                     await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
             except Exception:
@@ -4432,30 +4528,35 @@ async def callback(event):
                 {'user_id': target_id},
                 {'$set': {
                     'tier': 'premium',
+                    'plan': 'prime',  # Store plan key for profile display
                     'plan_name': plan['name'],
                     'max_accounts': plan['max_accounts'],
+                    'premium_granted_at': datetime.now(),
                     'premium_expires_at': expires_at,
+                    'plan_expiry': expires_at,  # Store for profile display
                     'approved': True
                 }},
                 upsert=True
             )
             
-            # Send notification to user
-            welcome_image = MESSAGES.get('welcome_image', '')
+            # Send notification to user with plan-specific image
+            prime_image = PLAN_IMAGES.get('prime')
             notify_text = (
-                "<b>🎉 Plan Activated!</b>\n\n"
-                "<b>Plan:</b> Prime\n"
-                "<b>Accounts:</b> 7\n"
-                "<b>Validity:</b> 30 days\n\n"
-                "<i>Your premium features are now active!</i>"
+                "<b>🎉 Premium Activated!</b>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                "<b>Your Plan:</b> ⭐ <b>Prime</b>\n"
+                "<b>Max Accounts:</b> <code>7</code>\n"
+                "<b>Duration:</b> <code>30 days</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                "<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
             )
             notify_buttons = [
                 [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
             ]
             
             try:
-                if welcome_image:
-                    await main_bot.send_file(target_id, welcome_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
+                if prime_image:
+                    await main_bot.send_file(target_id, prime_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
                 else:
                     await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
             except Exception:
@@ -4482,30 +4583,35 @@ async def callback(event):
                 {'user_id': target_id},
                 {'$set': {
                     'tier': 'premium',
+                    'plan': 'dominion',  # Store plan key for profile display
                     'plan_name': plan['name'],
                     'max_accounts': plan['max_accounts'],
+                    'premium_granted_at': datetime.now(),
                     'premium_expires_at': expires_at,
+                    'plan_expiry': expires_at,  # Store for profile display
                     'approved': True
                 }},
                 upsert=True
             )
             
-            # Send notification to user
-            welcome_image = MESSAGES.get('welcome_image', '')
+            # Send notification to user with plan-specific image
+            dominion_image = PLAN_IMAGES.get('dominion')
             notify_text = (
-                "<b>🎉 Plan Activated!</b>\n\n"
-                "<b>Plan:</b> Dominion\n"
-                "<b>Accounts:</b> 15\n"
-                "<b>Validity:</b> 30 days\n\n"
-                "<i>Your premium features are now active!</i>"
+                "<b>🎉 Premium Activated!</b>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                "<b>Your Plan:</b> 👑 <b>Dominion</b>\n"
+                "<b>Max Accounts:</b> <code>15</code>\n"
+                "<b>Duration:</b> <code>30 days</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                "<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
             )
             notify_buttons = [
                 [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
             ]
             
             try:
-                if welcome_image:
-                    await main_bot.send_file(target_id, welcome_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
+                if dominion_image:
+                    await main_bot.send_file(target_id, dominion_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
                 else:
                     await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
             except Exception:
@@ -4643,21 +4749,24 @@ async def callback(event):
                 round_d = interval_data['round_delay']
             
             text = (
-                f"📱 **Account Details**\n\n"
-                f"Phone: {acc['phone']}\n"
-                f"Name: {acc.get('name', 'Unknown')}\n"
-                f"Status: {status}\n\n"
-                f"📊 **Statistics**\n"
-                f"Topics: {topics}\n"
-                f"Groups: {groups}\n"
-                f"Messages Sent: {stats.get('total_sent', 0)}\n"
-                f"Failed: {stats.get('total_failed', 0)}\n\n"
-                f"⏱️ **Delays**\n"
-                f"ᴍᴇꜱꜱᴀɢᴇ ᴅᴇʟᴀʏ: {msg_d}ꜱ\n"
-                f"ʀᴏᴜɴᴅ ᴅᴇʟᴀʏ: {round_d}ꜱ"
+                "<b>📱 Account Details</b>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                "<b>📋 Account Info:</b>\n"
+                f"├ <b>Phone:</b> <code>{acc['phone']}</code>\n"
+                f"├ <b>Name:</b> <code>{acc.get('name', 'Unknown')}</code>\n"
+                f"└ <b>Status:</b> {status}\n\n"
+                "<b>📊 Statistics:</b>\n"
+                f"├ <b>Topics:</b> <code>{topics}</code>\n"
+                f"├ <b>Groups:</b> <code>{groups}</code>\n"
+                f"├ <b>✅ Messages Sent:</b> <code>{stats.get('total_sent', 0)}</code>\n"
+                f"└ <b>❌ Failed:</b> <code>{stats.get('total_failed', 0)}</code>\n\n"
+                "<b>⏱️ Interval Settings:</b>\n"
+                f"├ <b>⏰ Message Delay:</b> <code>{msg_d}s</code>\n"
+                f"└ <b>🔄 Round Delay:</b> <code>{round_d}s</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
             )
             
-            await event.edit(text, parse_mode='markdown', buttons=account_menu_keyboard(account_id, acc, uid))
+            await event.edit(text, parse_mode='html', buttons=account_menu_keyboard(account_id, acc, uid))
             return
         
         if data.startswith("topics_"):
@@ -4779,17 +4888,31 @@ async def callback(event):
             stats = get_account_stats(account_id)
             failed = account_failed_groups_col.count_documents({'account_id': account_id})
             
-            text = f"**Stats** - {acc['phone']}\n\n"
-            text += f"Sent: {stats.get('total_sent', 0)}\n"
-            text += f"Failed: {stats.get('total_failed', 0)}\n"
-            text += f"Skipped: {failed}\n"
-            
             last = stats.get('last_forward')
-            text += f"Last: {last.strftime('%Y-%m-%d %H:%M') if last else 'Never'}"
+            last_time = last.strftime('%Y-%m-%d %H:%M') if last else 'Never'
             
-            await event.edit(text, buttons=[
-                [Button.inline("Reset", f"reset_{account_id}")],
-                [Button.inline("Back", f"acc_{account_id}")]
+            total_sent = stats.get('total_sent', 0)
+            total_failed = stats.get('total_failed', 0)
+            total_attempts = total_sent + total_failed
+            success_rate = (total_sent / total_attempts * 100) if total_attempts > 0 else 0
+            
+            text = (
+                f"<b>📊 Account Statistics</b>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                f"<b>📱 Account:</b> <code>{acc['phone']}</code>\n\n"
+                "<b>📈 Message Statistics:</b>\n"
+                f"├ <b>✅ Messages Sent:</b> <code>{total_sent}</code>\n"
+                f"├ <b>❌ Messages Failed:</b> <code>{total_failed}</code>\n"
+                f"├ <b>⏭️ Skipped Groups:</b> <code>{failed}</code>\n"
+                f"└ <b>📊 Success Rate:</b> <code>{success_rate:.1f}%</code>\n\n"
+                "<b>⏰ Last Activity:</b>\n"
+                f"└ <b>Last Forward:</b> <code>{last_time}</code>\n\n"
+                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
+            )
+            
+            await event.edit(text, parse_mode='html', buttons=[
+                [Button.inline("🔄 Reset Stats", f"reset_{account_id}")],
+                [Button.inline("← Back", f"acc_{account_id}")]
             ])
             return
         
@@ -4863,8 +4986,22 @@ async def callback(event):
                     pass
                 del auto_reply_clients[account_id]
             
+            # Send log message to user (not per account)
+            try:
+                user_doc = get_user(uid)
+                logs_chat_id = user_doc.get('logs_chat_id')
+                if logs_chat_id and CONFIG.get('logger_bot_token'):
+                    log_msg = (
+                        f"<b>⏹️ Ads Stopped</b>\n\n"
+                        f"<b>Account:</b> <code>{acc.get('phone', 'Unknown')}</code>\n\n"
+                        f"<i>Advertising has been stopped by user.</i>"
+                    )
+                    await logger_bot.send_message(int(logs_chat_id), log_msg, parse_mode='html')
+                    print(f"[STOP] Stop log sent to user {uid} for account {account_id}")
+            except Exception as e:
+                print(f"[LOG ERROR] Failed to send stop log to user {uid}: {e}")
+            
             await event.answer("Stopped!")
-            await send_log(account_id, "Forwarding stopped")
             await event.edit("Forwarding stopped!", buttons=[[Button.inline("Back", f"acc_{account_id}")]])
             return
         
@@ -6433,22 +6570,24 @@ async def cmd_grow(event):
         upsert=True
     )
     
-    # Send notification to user with image
-    welcome_image = MESSAGES.get('welcome_image', '')
+    # Send notification to user with plan-specific image
+    grow_image = PLAN_IMAGES.get('grow')
     notify_text = (
-        "<b>🎉 Plan Activated!</b>\n\n"
-        "<b>Plan:</b> Grow\n"
-        "<b>Accounts:</b> 3\n"
-        "<b>Validity:</b> " + str(days) + " days\n\n"
-        "<i>Your premium features are now active!</i>"
+        "<b>🎉 Premium Activated!</b>\n\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+        "<b>Your Plan:</b> 📈 <b>Grow</b>\n"
+        "<b>Max Accounts:</b> <code>3</code>\n"
+        "<b>Duration:</b> <code>" + str(days) + " days</code>\n\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+        "<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
     )
     notify_buttons = [
         [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
     ]
     
     try:
-        if welcome_image:
-            await main_bot.send_file(target_id, welcome_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
+        if grow_image:
+            await main_bot.send_file(target_id, grow_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
         else:
             await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
         await event.respond(f"✅ Grow plan granted to {target_id} for {days} days")
@@ -6479,22 +6618,24 @@ async def cmd_prime(event):
         upsert=True
     )
     
-    # Send notification to user with image
-    welcome_image = MESSAGES.get('welcome_image', '')
+    # Send notification to user with plan-specific image
+    prime_image = PLAN_IMAGES.get('prime')
     notify_text = (
-        "<b>🎉 Plan Activated!</b>\n\n"
-        "<b>Plan:</b> Prime\n"
-        "<b>Accounts:</b> 7\n"
-        "<b>Validity:</b> " + str(days) + " days\n\n"
-        "<i>Your premium features are now active!</i>"
+        "<b>🎉 Premium Activated!</b>\n\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+        "<b>Your Plan:</b> ⭐ <b>Prime</b>\n"
+        "<b>Max Accounts:</b> <code>7</code>\n"
+        "<b>Duration:</b> <code>" + str(days) + " days</code>\n\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+        "<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
     )
     notify_buttons = [
         [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
     ]
     
     try:
-        if welcome_image:
-            await main_bot.send_file(target_id, welcome_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
+        if prime_image:
+            await main_bot.send_file(target_id, prime_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
         else:
             await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
         await event.respond(f"✅ Prime plan granted to {target_id} for {days} days")
@@ -6525,22 +6666,24 @@ async def cmd_domi(event):
         upsert=True
     )
     
-    # Send notification to user with image
-    welcome_image = MESSAGES.get('welcome_image', '')
+    # Send notification to user with plan-specific image
+    dominion_image = PLAN_IMAGES.get('dominion')
     notify_text = (
-        "<b>🎉 Plan Activated!</b>\n\n"
-        "<b>Plan:</b> Dominion\n"
-        "<b>Accounts:</b> 15\n"
-        "<b>Validity:</b> " + str(days) + " days\n\n"
-        "<i>Your premium features are now active!</i>"
+        "<b>🎉 Premium Activated!</b>\n\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+        "<b>Your Plan:</b> 👑 <b>Dominion</b>\n"
+        "<b>Max Accounts:</b> <code>15</code>\n"
+        "<b>Duration:</b> <code>" + str(days) + " days</code>\n\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+        "<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
     )
     notify_buttons = [
         [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
     ]
     
     try:
-        if welcome_image:
-            await main_bot.send_file(target_id, welcome_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
+        if dominion_image:
+            await main_bot.send_file(target_id, dominion_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
         else:
             await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
         await event.respond(f"✅ Dominion plan granted to {target_id} for {days} days")
