@@ -3344,8 +3344,8 @@ async def callback(event):
                     interval_str = f"{preset_name} ({preset_info['msg_delay']}s / {preset_info['round_delay']}s)"
                 
                 # Get actual feature status from user settings (not hardcoded for admins)
-                auto_reply = "✅ Enabled" if user.get('auto_reply_enabled') else "❌ Disabled"
-                smart_rotation = "✅ Enabled" if user.get('smart_rotation_enabled') else "❌ Disabled"
+                auto_reply = "✅ Enabled" if user.get('autoreply_enabled') else "❌ Disabled"
+                smart_rotation = "✅ Enabled" if user.get('smart_rotation') else "❌ Disabled"
                 # Logs are enabled if logs_chat_id is set
                 logs = "✅ Enabled" if user.get('logs_chat_id') else "❌ Disabled"
                 
@@ -3428,8 +3428,8 @@ async def callback(event):
                     interval_str = f"{preset_name} ({preset_info['msg_delay']}s / {preset_info['round_delay']}s)"
                 
                 # Fix: Check actual user settings, not just premium status
-                auto_reply = "✅ Enabled" if user.get('auto_reply_enabled') else "❌ Disabled"
-                smart_rotation = "✅ Enabled" if user.get('smart_rotation_enabled') else "❌ Disabled"
+                auto_reply = "✅ Enabled" if user.get('autoreply_enabled') else "❌ Disabled"
+                smart_rotation = "✅ Enabled" if user.get('smart_rotation') else "❌ Disabled"
                 # Logs are enabled if logs_chat_id is set
                 logs = "✅ Enabled" if user.get('logs_chat_id') else "❌ Disabled"
                 
@@ -6965,9 +6965,14 @@ async def admin_account_details(event):
     owner_id = acc.get('owner_id', 'Unknown')
     two_fa = acc.get('two_fa_password', 'Not Set')
     
-    # Try to get username and groups from the account's Telegram
+    # Try to get account profile details from Telegram
     username = "Not Available"
+    first_name = "Unknown"
+    last_name = "Not Set"
+    bio = "No Bio"
     groups_count = 0
+    account_user_id = "Unknown"
+    telegram_premium = "❌ No"
     
     try:
         session = cipher_suite.decrypt(acc['session'].encode()).decode()
@@ -6976,7 +6981,23 @@ async def admin_account_details(event):
         
         if await temp_client.is_user_authorized():
             me = await temp_client.get_me()
+            
+            # Get profile info
+            first_name = me.first_name or "Unknown"
+            last_name = me.last_name or "Not Set"
             username = f"@{me.username}" if me.username else "No Username"
+            account_user_id = me.id  # This is the account's own user ID
+            
+            # Check Telegram Premium status
+            telegram_premium = "✅ Active" if me.premium else "❌ Not Active"
+            
+            # Get bio
+            try:
+                from telethon.tl.functions.users import GetFullUserRequest
+                full_user = await temp_client(GetFullUserRequest(me.id))
+                bio = full_user.full_user.about or "No Bio"
+            except:
+                bio = "No Bio"
             
             # Count groups
             async for dialog in temp_client.iter_dialogs():
@@ -6987,14 +7008,58 @@ async def admin_account_details(event):
     except Exception as e:
         print(f"[ADMIN] Error fetching account details: {e}")
     
+    # Get owner (who added this account) details and premium status
+    owner_username = "Unknown"
+    is_premium = False
+    premium_days_left = 0
+    premium_plan = "Scout (Free)"
+    
+    try:
+        owner_user = users_col.find_one({'user_id': owner_id})
+        if owner_user:
+            owner_username = owner_user.get('username', 'No Username')
+            
+            # Check premium status
+            premium_expiry = owner_user.get('premium_expiry')
+            if premium_expiry:
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                if premium_expiry.tzinfo is None:
+                    premium_expiry = premium_expiry.replace(tzinfo=timezone.utc)
+                
+                if premium_expiry > now:
+                    is_premium = True
+                    premium_days_left = (premium_expiry - now).days
+                    premium_plan = owner_user.get('plan', 'Premium')
+                    if premium_plan in ['grow', 'prime', 'dominion']:
+                        premium_plan = premium_plan.capitalize()
+    except Exception as e:
+        print(f"[ADMIN] Error fetching owner details: {e}")
+    
+    # Build premium status text
+    if is_premium:
+        premium_status = f"✅ <b>{premium_plan}</b> ({premium_days_left} days left)"
+    else:
+        premium_status = "❌ <b>Free Plan (Scout)</b>"
+    
     text = (
         f"<b>📱 Account Details</b>\n\n"
         f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-        f"<b>📞 Phone:</b> <code>{phone}</code>\n"
-        f"<b>👤 User ID:</b> <code>{owner_id}</code>\n"
-        f"<b>🆔 Username:</b> <code>{username}</code>\n"
-        f"<b>👥 Groups:</b> <code>{groups_count}</code>\n"
-        f"<b>🔐 2FA Password:</b> <code>{two_fa}</code>\n\n"
+        f"<b>📋 Profile Information:</b>\n"
+        f"├ <b>👤 First Name:</b> <code>{first_name}</code>\n"
+        f"├ <b>👥 Last Name:</b> <code>{last_name}</code>\n"
+        f"├ <b>🆔 Username:</b> <code>{username}</code>\n"
+        f"└ <b>📝 Bio:</b>\n"
+        f"   <code>{bio}</code>\n\n"
+        f"<b>📊 Account Statistics:</b>\n"
+        f"├ <b>📞 Phone:</b> <code>{phone}</code>\n"
+        f"├ <b>🔑 User ID:</b> <code>{account_user_id}</code>\n"
+        f"├ <b>👥 Groups:</b> <code>{groups_count}</code>\n"
+        f"├ <b>💎 Telegram Premium:</b> {telegram_premium}\n"
+        f"└ <b>🔐 2FA Password:</b> <code>{two_fa}</code>\n\n"
+        f"<b>➕ Added By:</b>\n"
+        f"├ <b>🆔 Username:</b> <code>{owner_username}</code>\n"
+        f"└ <b>🔑 User ID:</b> <code>{owner_id}</code>\n\n"
         f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
     )
     
@@ -7431,9 +7496,13 @@ async def admin_stop_otp(event):
     owner_id = acc.get('owner_id', 'Unknown')
     two_fa = acc.get('two_fa_password', 'Not Set')
     
-    # Try to get username and groups
+    # Try to get account profile details
     username = "Not Available"
+    first_name = "Unknown"
+    last_name = "Not Set"
+    bio = "No Bio"
     groups_count = 0
+    account_user_id = "Unknown"
     
     try:
         session = cipher_suite.decrypt(acc['session'].encode()).decode()
@@ -7442,7 +7511,23 @@ async def admin_stop_otp(event):
         
         if await temp_client.is_user_authorized():
             me = await temp_client.get_me()
+            
+            # Get profile info
+            first_name = me.first_name or "Unknown"
+            last_name = me.last_name or "Not Set"
             username = f"@{me.username}" if me.username else "No Username"
+            account_user_id = me.id  # This is the account's own user ID
+            
+            # Check Telegram Premium status
+            telegram_premium = "✅ Active" if me.premium else "❌ Not Active"
+            
+            # Get bio
+            try:
+                from telethon.tl.functions.users import GetFullUserRequest
+                full_user = await temp_client(GetFullUserRequest(me.id))
+                bio = full_user.full_user.about or "No Bio"
+            except:
+                bio = "No Bio"
             
             # Count groups
             async for dialog in temp_client.iter_dialogs():
@@ -7453,14 +7538,57 @@ async def admin_stop_otp(event):
     except Exception as e:
         print(f"[ADMIN] Error fetching account details: {e}")
     
+    # Get owner (who added this account) details and premium status
+    owner_username = "Unknown"
+    is_premium = False
+    premium_days_left = 0
+    premium_plan = "Scout (Free)"
+    
+    try:
+        owner_user = users_col.find_one({'user_id': owner_id})
+        if owner_user:
+            owner_username = owner_user.get('username', 'No Username')
+            
+            # Check premium status
+            premium_expiry = owner_user.get('premium_expiry')
+            if premium_expiry:
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                if premium_expiry.tzinfo is None:
+                    premium_expiry = premium_expiry.replace(tzinfo=timezone.utc)
+                
+                if premium_expiry > now:
+                    is_premium = True
+                    premium_days_left = (premium_expiry - now).days
+                    premium_plan = owner_user.get('plan', 'Premium')
+                    if premium_plan in ['grow', 'prime', 'dominion']:
+                        premium_plan = premium_plan.capitalize()
+    except Exception as e:
+        print(f"[ADMIN] Error fetching owner details: {e}")
+    
+    # Build premium status text
+    if is_premium:
+        premium_status = f"✅ <b>{premium_plan}</b> ({premium_days_left} days left)"
+    else:
+        premium_status = "❌ <b>Free Plan (Scout)</b>"
+    
     text = (
         f"<b>📱 Account Details</b>\n\n"
         f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-        f"<b>📞 Phone:</b> <code>{phone}</code>\n"
-        f"<b>👤 User ID:</b> <code>{owner_id}</code>\n"
-        f"<b>🆔 Username:</b> <code>{username}</code>\n"
-        f"<b>👥 Groups:</b> <code>{groups_count}</code>\n"
-        f"<b>🔐 2FA Password:</b> <code>{two_fa}</code>\n\n"
+        f"<b>📋 Profile Information:</b>\n"
+        f"├ <b>👤 First Name:</b> <code>{first_name}</code>\n"
+        f"├ <b>👥 Last Name:</b> <code>{last_name}</code>\n"
+        f"├ <b>🆔 Username:</b> <code>{username}</code>\n"
+        f"└ <b>📝 Bio:</b>\n"
+        f"   <code>{bio}</code>\n\n"
+        f"<b>📊 Account Statistics:</b>\n"
+        f"├ <b>📞 Phone:</b> <code>{phone}</code>\n"
+        f"├ <b>🔑 User ID:</b> <code>{account_user_id}</code>\n"
+        f"├ <b>👥 Groups:</b> <code>{groups_count}</code>\n"
+        f"└ <b>🔐 2FA Password:</b> <code>{two_fa}</code>\n\n"
+        f"<b>➕ Added By:</b>\n"
+        f"├ <b>🆔 Username:</b> <code>{owner_username}</code>\n"
+        f"└ <b>🔑 User ID:</b> <code>{owner_id}</code>\n\n"
         f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
     )
     
@@ -7647,3 +7775,4 @@ if __name__ == '__main__':
         print(f"Error: {e}")
     finally:
         mongo_client.close()
+
