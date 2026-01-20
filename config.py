@@ -9,6 +9,9 @@ BOT_CONFIG = {
     'db_name': os.getenv('MONGO_DB_NAME', 'aztechads_db'),
     'logger_bot_token': os.getenv('LOGGER_BOT_TOKEN', '8392058083:AAG1XN-1XqZMRmhtA2OrNvVT3jesMEKEuTI'),
     'logger_bot_username': os.getenv('LOGGER_BOT_USERNAME', 'aztechloggersbot'),
+    # Admin Notifications Config
+    'notification_bot_token': os.getenv('NOTIFICATION_BOT_TOKEN', '8394490406:AAGbGWicdwVOy-vh62klwVKVOcl3ttpl5CU'),
+    'notification_channel_id': int(os.getenv('NOTIFICATION_CHANNEL_ID', '-1003557389292')),
 }
 
 # ===================== PLAN TIERS =====================
