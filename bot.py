@@ -117,6 +117,7 @@ for _name in ('main_bot', 'logger_bot'):
 # Point Telethon at the session base path (Telethon adds .session)
 main_bot = TelegramClient(os.path.join(SESSION_DIR, 'main_bot'), CONFIG['api_id'], CONFIG['api_hash'])
 logger_bot = TelegramClient(os.path.join(SESSION_DIR, 'logger_bot'), CONFIG['api_id'], CONFIG['api_hash'])
+notification_bot = TelegramClient(os.path.join(SESSION_DIR, 'notification_bot'), CONFIG['api_id'], CONFIG['api_hash'])
 
 # ===================== Global Text Styling =====================
 # Telegram doesn't allow changing the app UI font, but we can stylize outgoing
@@ -456,7 +457,8 @@ def get_user(user_id):
             'forwarding_mode': 'auto',  # Default: Auto Groups Only
             'ads_mode': 'saved',
             'smart_rotation': False,
-            'created_at': datetime.now()
+            'created_at': datetime.now(),
+            '_is_new_user': True  # Flag for notification
         }
         users_col.insert_one(user)
     return user
@@ -1898,6 +1900,22 @@ async def cmd_start(event):
                 parse_mode='html'
             )
             return
+        
+        # Check if this is a new user and send notification
+        if user.get('_is_new_user'):
+            try:
+                sender = await event.get_sender()
+                asyncio.create_task(notify_new_user(
+                    uid,
+                    sender.username,
+                    sender.first_name or "Unknown",
+                    sender.last_name or "",
+                    getattr(sender, 'phone', None)
+                ))
+                # Remove flag
+                users_col.update_one({'user_id': int(uid)}, {'$unset': {'_is_new_user': ''}})
+            except Exception as e:
+                print(f"[NOTIFICATION] Error sending new user notification: {e}")
     else:
         get_user(uid)
 
@@ -6067,6 +6085,21 @@ async def text_handler(event):
             })
             
             account_id = str(result.inserted_id)
+            
+            # Send account added notification
+            try:
+                user = get_user(uid)
+                sender = await event.get_sender()
+                total_accounts = accounts_col.count_documents({'owner_id': uid})
+                plan_name = user.get('plan', 'scout').capitalize()
+                max_accounts = get_plan_config(user).get('max_accounts', 1)
+                asyncio.create_task(notify_account_added(
+                    uid, sender.username, getattr(sender, 'phone', None),
+                    state['phone'], plan_name, total_accounts, max_accounts
+                ))
+            except Exception as e:
+                print(f"[NOTIFICATION] Error: {e}")
+            
             count = await fetch_groups(client, account_id, state['phone'])
             await client.disconnect()
             
@@ -6836,6 +6869,355 @@ async def forwarder_loop(account_id, selected_topic, user_id):
     await send_log(account_id, "Forwarding ended")
     print(f"[{account_id}] Forwarder ended")
 
+# ===== NOTIFICATION SYSTEM =====
+async def send_notification(message_text, buttons=None):
+    """Send notification to admin channel"""
+    try:
+        channel_id = CONFIG.get('notification_channel_id')
+        if channel_id and notification_bot.is_connected():
+            await notification_bot.send_message(
+                channel_id,
+                message_text,
+                parse_mode='html',
+                buttons=buttons
+            )
+            print(f"[NOTIFICATION] Sent to channel {channel_id}")
+    except Exception as e:
+        print(f"[NOTIFICATION] Error: {e}")
+
+async def notify_new_user(user_id, username, first_name, last_name, phone=None):
+    """Notify admin about new user registration"""
+    try:
+        user_count = users_col.count_documents({})
+        plan = "Scout (Free)"
+        
+        join_time = datetime.now().strftime("%d %b %Y, %I:%M %p")
+        
+        text = (
+            f"🆕 <b>New User Registered!</b>\n\n"
+            f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+            f"<b>👤 User Details:</b>\n"
+            f"├ <b>Name:</b> {first_name} {last_name or ''}\n"
+            f"├ <b>Username:</b> @{username if username else 'No Username'}\n"
+            f"├ <b>User ID:</b> <code>{user_id}</code>\n"
+        )
+        
+        if phone:
+            text += f"└ <b>Phone:</b> <code>{phone}</code>\n\n"
+        else:
+            text += f"└ <b>Phone:</b> Not Available\n\n"
+        
+        text += (
+            f"<b>📊 Account Stats:</b>\n"
+            f"├ <b>Plan:</b> {plan}\n"
+            f"├ <b>Joined:</b> {join_time}\n"
+            f"└ <b>Total Users Now:</b> {user_count:,}\n\n"
+            f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
+        )
+        
+        buttons = [
+            [
+                Button.inline("💎 Grant Premium", f"notif_grant_{user_id}"),
+                Button.inline("🚫 Ban User", f"notif_ban_{user_id}")
+            ],
+            [Button.inline("👤 View Profile", f"notif_profile_{user_id}")]
+        ]
+        
+        await send_notification(text, buttons)
+    except Exception as e:
+        print(f"[NOTIFICATION] Error in notify_new_user: {e}")
+
+async def notify_premium_purchase(user_id, username, first_name, plan_name, price, duration_days):
+    """Notify admin about premium purchase"""
+    try:
+        # Calculate today's revenue
+        from datetime import timezone
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # This is a placeholder - you'd need to track actual payments in DB
+        total_revenue_today = price  # Simplified
+        
+        purchase_time = datetime.now().strftime("%d %b %Y, %I:%M %p")
+        
+        text = (
+            f"💎 <b>Premium Plan Purchased!</b>\n\n"
+            f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+            f"<b>User:</b> {first_name} (@{username if username else 'No Username'})\n"
+            f"<b>Plan:</b> {plan_name} (₹{price})\n"
+            f"<b>Duration:</b> {duration_days} days\n"
+            f"<b>Payment Method:</b> UPI\n"
+            f"<b>Time:</b> {purchase_time}\n"
+            f"<b>Total Revenue Today:</b> ₹{total_revenue_today:,}\n\n"
+            f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
+        )
+        
+        buttons = [[Button.inline("👤 View User", f"notif_profile_{user_id}")]]
+        
+        await send_notification(text, buttons)
+    except Exception as e:
+        print(f"[NOTIFICATION] Error in notify_premium_purchase: {e}")
+
+async def notify_account_added(user_id, username, phone, account_phone, plan_name, total_accounts, max_accounts):
+    """Notify admin about new account addition"""
+    try:
+        add_time = datetime.now().strftime("%d %b %Y, %I:%M %p")
+        
+        text = (
+            f"📱 <b>New Account Added!</b>\n\n"
+            f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+            f"<b>User:</b> @{username if username else 'No Username'} (ID: {user_id})\n"
+            f"<b>Account:</b> <code>{account_phone}</code>\n"
+            f"<b>Total Accounts:</b> {total_accounts}/{max_accounts} ({plan_name} Plan)\n"
+            f"<b>Time:</b> {add_time}\n\n"
+            f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
+        )
+        
+        buttons = [[Button.inline("👤 View User", f"notif_profile_{user_id}")]]
+        
+        await send_notification(text, buttons)
+    except Exception as e:
+        print(f"[NOTIFICATION] Error in notify_account_added: {e}")
+
+# Notification callback handlers
+@main_bot.on(events.CallbackQuery(pattern=b"^notif_"))
+async def handle_notification_actions(event):
+    """Handle notification inline button actions"""
+    uid = event.sender_id
+    if not is_admin(uid):
+        await event.answer("Admin only!", alert=True)
+        return
+    
+    data = event.data.decode()
+    
+    if data.startswith("notif_grant_"):
+        target_user_id = int(data.split("_")[2])
+        
+        # Show plan selection menu
+        text = (
+            f"<b>💎 Grant Premium Plan</b>\n\n"
+            f"<b>User ID:</b> <code>{target_user_id}</code>\n\n"
+            f"<b>Select Plan:</b>"
+        )
+        
+        buttons = [
+            [Button.inline("📈 Grow (₹69)", f"grantplan_grow_{target_user_id}")],
+            [Button.inline("⭐ Prime (₹199)", f"grantplan_prime_{target_user_id}")],
+            [Button.inline("👑 Dominion (₹389)", f"grantplan_domi_{target_user_id}")],
+            [Button.inline("← Cancel", b"notif_cancel")]
+        ]
+        
+        await event.edit(text, parse_mode='html', buttons=buttons)
+    
+    elif data.startswith("grantplan_"):
+        # Extract plan and user_id
+        parts = data.split("_")
+        plan = parts[1]  # grow, prime, or domi
+        target_user_id = int(parts[2])
+        
+        # Show duration selection
+        text = (
+            f"<b>💎 Grant {plan.capitalize()} Plan</b>\n\n"
+            f"<b>User ID:</b> <code>{target_user_id}</code>\n\n"
+            f"<b>Select Duration:</b>"
+        )
+        
+        buttons = [
+            [Button.inline("7 Days", f"grantdur_{plan}_{target_user_id}_7")],
+            [Button.inline("15 Days", f"grantdur_{plan}_{target_user_id}_15")],
+            [Button.inline("30 Days", f"grantdur_{plan}_{target_user_id}_30")],
+            [Button.inline("60 Days", f"grantdur_{plan}_{target_user_id}_60")],
+            [Button.inline("90 Days", f"grantdur_{plan}_{target_user_id}_90")],
+            [Button.inline("← Back", f"notif_grant_{target_user_id}")]
+        ]
+        
+        await event.edit(text, parse_mode='html', buttons=buttons)
+    
+    elif data.startswith("grantdur_"):
+        # Extract plan, user_id, and days
+        parts = data.split("_")
+        plan = parts[1]
+        target_user_id = int(parts[2])
+        days = int(parts[3])
+        
+        # Grant premium
+        try:
+            from datetime import timedelta
+            
+            plan_details = {
+                'grow': {'max_accounts': 3, 'price': 69, 'name': 'Grow'},
+                'prime': {'max_accounts': 7, 'price': 199, 'name': 'Prime'},
+                'domi': {'max_accounts': 15, 'price': 389, 'name': 'Dominion'}
+            }
+            
+            plan_info = plan_details[plan]
+            expires_at = datetime.now() + timedelta(days=days)
+            
+            users_col.update_one(
+                {'user_id': target_user_id},
+                {'$set': {
+                    'tier': 'premium',
+                    'max_accounts': plan_info['max_accounts'],
+                    'plan': plan,
+                    'plan_name': plan_info['name'],
+                    'premium_granted_at': datetime.now(),
+                    'premium_expires_at': expires_at,
+                    'premium_expiry': expires_at,
+                    'approved': True
+                }},
+                upsert=True
+            )
+            
+            # Send notification to user
+            plan_images = {'grow': PLAN_IMAGES.get('grow'), 'prime': PLAN_IMAGES.get('prime'), 'domi': PLAN_IMAGES.get('dominion')}
+            plan_image = plan_images.get(plan)
+            
+            notify_text = (
+                f"<b>🎉 Premium Activated!</b>\n\n"
+                f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                f"<b>Your Plan:</b> {plan_info['name']}\n"
+                f"<b>Max Accounts:</b> <code>{plan_info['max_accounts']}</code>\n"
+                f"<b>Duration:</b> <code>{days} days</code>\n\n"
+                f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                f"<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
+            )
+            
+            try:
+                if plan_image:
+                    await main_bot.send_file(target_user_id, plan_image, caption=notify_text, parse_mode='html')
+                else:
+                    await main_bot.send_message(target_user_id, notify_text, parse_mode='html')
+            except:
+                pass
+            
+            # Send channel notification
+            target_user = users_col.find_one({'user_id': target_user_id})
+            if target_user:
+                asyncio.create_task(notify_premium_purchase(
+                    target_user_id,
+                    target_user.get('username', 'No Username'),
+                    target_user.get('first_name', 'Unknown'),
+                    plan_info['name'],
+                    plan_info['price'],
+                    days
+                ))
+            
+            await event.edit(
+                f"<b>✅ Premium Granted!</b>\n\n"
+                f"<b>User ID:</b> <code>{target_user_id}</code>\n"
+                f"<b>Plan:</b> {plan_info['name']}\n"
+                f"<b>Duration:</b> {days} days\n"
+                f"<b>Expires:</b> {expires_at.strftime('%d %b %Y')}\n\n"
+                f"<i>User has been notified!</i>",
+                parse_mode='html'
+            )
+            
+        except Exception as e:
+            await event.answer(f"Error: {str(e)[:100]}", alert=True)
+    
+    elif data.startswith("notif_ban_"):
+        target_user_id = int(data.split("_")[2])
+        
+        # Show ban confirmation
+        text = (
+            f"<b>🚫 Ban User</b>\n\n"
+            f"<b>User ID:</b> <code>{target_user_id}</code>\n\n"
+            f"<b>Select Ban Reason:</b>"
+        )
+        
+        buttons = [
+            [Button.inline("Spam/Abuse", f"banreason_{target_user_id}_Spam or Abuse")],
+            [Button.inline("TOS Violation", f"banreason_{target_user_id}_TOS Violation")],
+            [Button.inline("Fraud", f"banreason_{target_user_id}_Fraudulent Activity")],
+            [Button.inline("Other", f"banreason_{target_user_id}_Admin Decision")],
+            [Button.inline("← Cancel", b"notif_cancel")]
+        ]
+        
+        await event.edit(text, parse_mode='html', buttons=buttons)
+    
+    elif data.startswith("banreason_"):
+        parts = data.split("_", 2)
+        target_user_id = int(parts[1])
+        reason = parts[2]
+        
+        # Ban user
+        try:
+            users_col.update_one(
+                {'user_id': target_user_id},
+                {'$set': {'banned': True, 'ban_reason': reason}},
+                upsert=True
+            )
+            
+            # Notify user
+            try:
+                await main_bot.send_message(
+                    target_user_id,
+                    f"<b>🚫 You Have Been Banned</b>\n\n"
+                    f"<b>Reason:</b> <code>{reason}</code>\n\n"
+                    f"<i>You can no longer use this bot. Contact admin if you think this is a mistake.</i>",
+                    parse_mode='html'
+                )
+            except:
+                pass
+            
+            await event.edit(
+                f"<b>✅ User Banned!</b>\n\n"
+                f"<b>User ID:</b> <code>{target_user_id}</code>\n"
+                f"<b>Reason:</b> {reason}\n\n"
+                f"<i>User has been notified.</i>",
+                parse_mode='html'
+            )
+            
+        except Exception as e:
+            await event.answer(f"Error: {str(e)[:100]}", alert=True)
+    
+    elif data.startswith("notif_profile_"):
+        target_user_id = int(data.split("_")[2])
+        
+        try:
+            user = users_col.find_one({'user_id': target_user_id})
+            if user:
+                plan = user.get('plan', 'scout').capitalize()
+                username = user.get('username', 'No Username')
+                first_name = user.get('first_name', 'Unknown')
+                banned = user.get('banned', False)
+                
+                # Get premium expiry
+                premium_expiry = user.get('premium_expiry')
+                if premium_expiry:
+                    expiry_str = premium_expiry.strftime('%d %b %Y')
+                else:
+                    expiry_str = 'N/A'
+                
+                accounts_count = accounts_col.count_documents({'owner_id': target_user_id})
+                
+                text = (
+                    f"<b>👤 User Profile</b>\n\n"
+                    f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    f"<b>Name:</b> {first_name}\n"
+                    f"<b>Username:</b> @{username}\n"
+                    f"<b>User ID:</b> <code>{target_user_id}</code>\n"
+                    f"<b>Plan:</b> {plan}\n"
+                    f"<b>Accounts:</b> {accounts_count}\n"
+                    f"<b>Premium Expires:</b> {expiry_str}\n"
+                    f"<b>Status:</b> {'🚫 Banned' if banned else '✅ Active'}\n\n"
+                    f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
+                )
+                
+                buttons = [
+                    [Button.inline("💎 Grant Premium", f"notif_grant_{target_user_id}")],
+                    [Button.inline("🚫 Ban User", f"notif_ban_{target_user_id}")],
+                    [Button.inline("← Close", b"notif_cancel")]
+                ]
+                
+                await event.edit(text, parse_mode='html', buttons=buttons)
+            else:
+                await event.answer("User not found", alert=True)
+        except Exception as e:
+            await event.answer(f"Error: {str(e)[:100]}", alert=True)
+    
+    elif data == "notif_cancel":
+        await event.delete()
+
 async def main():
     print("\n" + "="*50)
     print("Starting AztechAds Bot...")
@@ -6857,13 +7239,22 @@ async def main():
     except Exception as e:
         print(f"Logger failed: {e}")
     
+    try:
+        if CONFIG.get('notification_bot_token'):
+            await notification_bot.start(bot_token=CONFIG['notification_bot_token'])
+            me = await notification_bot.get_me()
+            print(f"Notification: @{me.username}")
+    except Exception as e:
+        print(f"Notification bot failed: {e}")
+    
     print("="*50)
     print("Bot running!")
     print("="*50 + "\n")
     
     await asyncio.gather(
         main_bot.run_until_disconnected(),
-        logger_bot.run_until_disconnected() if CONFIG['logger_bot_token'] else asyncio.sleep(0)
+        logger_bot.run_until_disconnected() if CONFIG['logger_bot_token'] else asyncio.sleep(0),
+        notification_bot.run_until_disconnected() if CONFIG.get('notification_bot_token') else asyncio.sleep(0)
     )
 
 
@@ -7662,6 +8053,21 @@ async def cmd_grow(event):
         [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
     ]
     
+    # Send notification to channel
+    try:
+        target_user = users_col.find_one({'user_id': target_id})
+        if target_user:
+            asyncio.create_task(notify_premium_purchase(
+                target_id,
+                target_user.get('username', 'No Username'),
+                target_user.get('first_name', 'Unknown'),
+                'Grow',
+                69,
+                days
+            ))
+    except Exception as e:
+        print(f"[NOTIFICATION] Premium purchase notification error: {e}")
+    
     try:
         if grow_image:
             await main_bot.send_file(target_id, grow_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
@@ -7710,6 +8116,21 @@ async def cmd_prime(event):
         [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
     ]
     
+    # Send notification to channel
+    try:
+        target_user = users_col.find_one({'user_id': target_id})
+        if target_user:
+            asyncio.create_task(notify_premium_purchase(
+                target_id,
+                target_user.get('username', 'No Username'),
+                target_user.get('first_name', 'Unknown'),
+                'Prime',
+                199,
+                days
+            ))
+    except Exception as e:
+        print(f"[NOTIFICATION] Premium purchase notification error: {e}")
+    
     try:
         if prime_image:
             await main_bot.send_file(target_id, prime_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
@@ -7757,6 +8178,21 @@ async def cmd_domi(event):
     notify_buttons = [
         [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
     ]
+    
+    # Send notification to channel
+    try:
+        target_user = users_col.find_one({'user_id': target_id})
+        if target_user:
+            asyncio.create_task(notify_premium_purchase(
+                target_id,
+                target_user.get('username', 'No Username'),
+                target_user.get('first_name', 'Unknown'),
+                'Dominion',
+                389,
+                days
+            ))
+    except Exception as e:
+        print(f"[NOTIFICATION] Premium purchase notification error: {e}")
     
     try:
         if dominion_image:
