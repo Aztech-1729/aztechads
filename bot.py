@@ -6023,12 +6023,19 @@ async def text_handler(event):
                 total_accounts = accounts_col.count_documents({'owner_id': uid})
                 plan_name = user.get('plan', 'scout').capitalize()
                 max_accounts = get_plan_config(user).get('max_accounts', 1)
-                asyncio.create_task(notify_account_added(
+                
+                print(f"[ACCOUNT] Triggering notification for user {uid}, phone {state['phone']}")
+                # Use asyncio.create_task to avoid blocking, but ensure it runs
+                task = asyncio.create_task(notify_account_added(
                     uid, sender.username, getattr(sender, 'phone', None),
                     state['phone'], plan_name, total_accounts, max_accounts
                 ))
+                # Don't await - let it run in background, but store reference to prevent garbage collection
+                task.add_done_callback(lambda t: print(f"[ACCOUNT] Notification task completed: {t.exception() if t.exception() else 'Success'}"))
             except Exception as e:
-                print(f"[NOTIFICATION] Error: {e}")
+                print(f"[NOTIFICATION] Error creating notification task: {e}")
+                import traceback
+                traceback.print_exc()
             
             count = await fetch_groups(client, account_id, state['phone'])
             await client.disconnect()
