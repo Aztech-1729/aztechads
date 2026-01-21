@@ -464,10 +464,26 @@ def get_user(user_id):
     return user
 
 def is_premium(user_id):
+    """Premium check with expiry enforcement (auto-downgrade when expired)."""
     if is_admin(user_id):
         return True
+
     user = get_user(user_id)
-    return user.get('tier') == 'premium'
+    if user.get('tier') != 'premium':
+        return False
+
+    expires_at = user.get('premium_expires_at') or user.get('premium_expiry') or user.get('plan_expiry')
+    if expires_at:
+        try:
+            # If stored datetime is naive, treat as local and compare with now()
+            if expires_at < datetime.now():
+                remove_user_premium(user_id)
+                return False
+        except Exception:
+            # If comparison fails, fail-open (keep premium) to avoid breaking users
+            return True
+
+    return True
 
 def has_per_account_config_access(user_id):
     """Check if user can access per-account config (Prime/Dominion only)."""
@@ -527,9 +543,18 @@ def set_user_premium(user_id, max_accounts, plan_name='premium'):
     )
 
 def remove_user_premium(user_id):
+    """Downgrade user to free and clear premium-related fields."""
     users_col.update_one(
         {'user_id': int(user_id)},
-        {'$set': {'tier': 'free', 'max_accounts': FREE_TIER['max_accounts']}}
+        {'$set': {
+            'tier': 'free',
+            'plan': 'scout',
+            'plan_name': 'Scout',
+            'max_accounts': FREE_TIER['max_accounts'],
+            'premium_expires_at': None,
+            'premium_expiry': None,
+            'plan_expiry': None,
+        }}
     )
 
 def get_all_users():
@@ -2555,10 +2580,12 @@ async def callback(event):
             
             target_uid = pay_req['user_id']
             
-            # Grant premium for 30 days
-            max_accounts = plan.get('max_accounts', 1)
-            set_user_premium(target_uid, max_accounts, plan_name=plan.get('name', plan_key))
-            
+            # Grant premium for 30 days (shared helper)
+            try:
+                await grant_premium_to_user(target_uid, plan_key, 30, source='payment_approval')
+            except Exception as e:
+                print(f"[PAYMENT] grant_premium_to_user failed: {e}")
+
             # Update payment status
             pay_req['status'] = 'approved'
             
@@ -2585,6 +2612,8 @@ async def callback(event):
                     await main_bot.send_message(target_uid, notify_text, parse_mode='html', buttons=notify_buttons)
             except Exception as e:
                 print(f"[PAYMENT] Failed to notify user {target_uid}: {e}")
+            
+            # Channel notification is handled by grant_premium_to_user()
             
             # Edit admin message
             try:
@@ -4823,54 +4852,21 @@ async def callback(event):
                 return
             
             target_id = int(data.replace("admin_grant_grow_", ""))
-            plan = PLANS['grow']
             days = 30
-            expires_at = datetime.now() + timedelta(days=days)
-            
-            users_col.update_one(
-                {'user_id': target_id},
-                {'$set': {
-                    'tier': 'premium',
-                    'plan': 'grow',  # Store plan key for profile display
-                    'plan_name': plan['name'],
-                    'max_accounts': plan['max_accounts'],
-                    'premium_granted_at': datetime.now(),
-                    'premium_expires_at': expires_at,
-                    'plan_expiry': expires_at,  # Store for profile display
-                    'approved': True
-                }},
-                upsert=True
-            )
-            
-            # Send notification to user with plan-specific image
-            grow_image = PLAN_IMAGES.get('grow')
-            notify_text = (
-                "<b>🎉 Premium Activated!</b>\n\n"
-                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                "<b>Your Plan:</b> 📈 <b>Grow</b>\n"
-                "<b>Max Accounts:</b> <code>3</code>\n"
-                "<b>Duration:</b> <code>30 days</code>\n\n"
-                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                "<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
-            )
-            notify_buttons = [
-                [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
-            ]
             
             try:
-                if grow_image:
-                    await main_bot.send_file(target_id, grow_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
-                else:
-                    await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
-            except Exception:
-                pass
-            
-            await event.answer("✅ Grow plan granted!", alert=True)
-            await event.edit(
-                f"<b>✅ Plan Granted</b>\n\n<i>User {target_id} now has Grow plan access.</i>",
-                parse_mode='html',
-                buttons=[[Button.inline("← Back to Users", b"admin_all_users")]]
-            )
+                # Use centralized function - handles DB, user notification, AND channel notification
+                await grant_premium_to_user(target_id, 'grow', days, source='admin_user_profile')
+                
+                await event.answer("✅ Grow plan granted!", alert=True)
+                await event.edit(
+                    f"<b>✅ Plan Granted</b>\n\n<i>User {target_id} now has Grow plan access (30 days).</i>",
+                    parse_mode='html',
+                    buttons=[[Button.inline("← Back to Users", b"admin_all_users")]]
+                )
+            except Exception as e:
+                await event.answer(f"❌ Error: {str(e)[:50]}", alert=True)
+                print(f"[ADMIN] Failed to grant Grow to {target_id}: {e}")
             return
         
         if data.startswith("admin_grant_prime_"):
@@ -4878,54 +4874,21 @@ async def callback(event):
                 return
             
             target_id = int(data.replace("admin_grant_prime_", ""))
-            plan = PLANS['prime']
             days = 30
-            expires_at = datetime.now() + timedelta(days=days)
-            
-            users_col.update_one(
-                {'user_id': target_id},
-                {'$set': {
-                    'tier': 'premium',
-                    'plan': 'prime',  # Store plan key for profile display
-                    'plan_name': plan['name'],
-                    'max_accounts': plan['max_accounts'],
-                    'premium_granted_at': datetime.now(),
-                    'premium_expires_at': expires_at,
-                    'plan_expiry': expires_at,  # Store for profile display
-                    'approved': True
-                }},
-                upsert=True
-            )
-            
-            # Send notification to user with plan-specific image
-            prime_image = PLAN_IMAGES.get('prime')
-            notify_text = (
-                "<b>🎉 Premium Activated!</b>\n\n"
-                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                "<b>Your Plan:</b> ⭐ <b>Prime</b>\n"
-                "<b>Max Accounts:</b> <code>7</code>\n"
-                "<b>Duration:</b> <code>30 days</code>\n\n"
-                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                "<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
-            )
-            notify_buttons = [
-                [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
-            ]
             
             try:
-                if prime_image:
-                    await main_bot.send_file(target_id, prime_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
-                else:
-                    await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
-            except Exception:
-                pass
-            
-            await event.answer("✅ Prime plan granted!", alert=True)
-            await event.edit(
-                f"<b>✅ Plan Granted</b>\n\n<i>User {target_id} now has Prime plan access.</i>",
-                parse_mode='html',
-                buttons=[[Button.inline("← Back to Users", b"admin_all_users")]]
-            )
+                # Use centralized function - handles DB, user notification, AND channel notification
+                await grant_premium_to_user(target_id, 'prime', days, source='admin_user_profile')
+                
+                await event.answer("✅ Prime plan granted!", alert=True)
+                await event.edit(
+                    f"<b>✅ Plan Granted</b>\n\n<i>User {target_id} now has Prime plan access (30 days).</i>",
+                    parse_mode='html',
+                    buttons=[[Button.inline("← Back to Users", b"admin_all_users")]]
+                )
+            except Exception as e:
+                await event.answer(f"❌ Error: {str(e)[:50]}", alert=True)
+                print(f"[ADMIN] Failed to grant Prime to {target_id}: {e}")
             return
         
         if data.startswith("admin_grant_dominion_"):
@@ -4933,54 +4896,21 @@ async def callback(event):
                 return
             
             target_id = int(data.replace("admin_grant_dominion_", ""))
-            plan = PLANS['dominion']
             days = 30
-            expires_at = datetime.now() + timedelta(days=days)
-            
-            users_col.update_one(
-                {'user_id': target_id},
-                {'$set': {
-                    'tier': 'premium',
-                    'plan': 'dominion',  # Store plan key for profile display
-                    'plan_name': plan['name'],
-                    'max_accounts': plan['max_accounts'],
-                    'premium_granted_at': datetime.now(),
-                    'premium_expires_at': expires_at,
-                    'plan_expiry': expires_at,  # Store for profile display
-                    'approved': True
-                }},
-                upsert=True
-            )
-            
-            # Send notification to user with plan-specific image
-            dominion_image = PLAN_IMAGES.get('dominion')
-            notify_text = (
-                "<b>🎉 Premium Activated!</b>\n\n"
-                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                "<b>Your Plan:</b> 👑 <b>Dominion</b>\n"
-                "<b>Max Accounts:</b> <code>15</code>\n"
-                "<b>Duration:</b> <code>30 days</code>\n\n"
-                "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                "<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
-            )
-            notify_buttons = [
-                [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
-            ]
             
             try:
-                if dominion_image:
-                    await main_bot.send_file(target_id, dominion_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
-                else:
-                    await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
-            except Exception:
-                pass
-            
-            await event.answer("✅ Dominion plan granted!", alert=True)
-            await event.edit(
-                f"<b>✅ Plan Granted</b>\n\n<i>User {target_id} now has Dominion plan access.</i>",
-                parse_mode='html',
-                buttons=[[Button.inline("← Back to Users", b"admin_all_users")]]
-            )
+                # Use centralized function - handles DB, user notification, AND channel notification
+                await grant_premium_to_user(target_id, 'dominion', days, source='admin_user_profile')
+                
+                await event.answer("✅ Dominion plan granted!", alert=True)
+                await event.edit(
+                    f"<b>✅ Plan Granted</b>\n\n<i>User {target_id} now has Dominion plan access (30 days).</i>",
+                    parse_mode='html',
+                    buttons=[[Button.inline("← Back to Users", b"admin_all_users")]]
+                )
+            except Exception as e:
+                await event.answer(f"❌ Error: {str(e)[:50]}", alert=True)
+                print(f"[ADMIN] Failed to grant Dominion to {target_id}: {e}")
             return
         
         if data.startswith("admin_revoke_premium_"):
@@ -6871,27 +6801,49 @@ async def forwarder_loop(account_id, selected_topic, user_id):
 
 # ===== NOTIFICATION SYSTEM =====
 async def send_notification(message_text, buttons=None):
-    """Send notification to admin channel"""
+    """Send notification to admin channel (auto-start notification bot if needed)."""
     try:
         channel_id = CONFIG.get('notification_channel_id')
-        if channel_id and notification_bot.is_connected():
-            await notification_bot.send_message(
-                channel_id,
-                message_text,
-                parse_mode='html',
-                buttons=buttons
-            )
-            print(f"[NOTIFICATION] Sent to channel {channel_id}")
+        if not channel_id:
+            return
+
+        # Ensure notification bot is started
+        if not notification_bot.is_connected():
+            token = CONFIG.get('notification_bot_token')
+            if token:
+                try:
+                    await notification_bot.start(bot_token=token)
+                    me = await notification_bot.get_me()
+                    print(f"[NOTIFICATION] Notification bot connected as @{me.username}")
+                except Exception as e:
+                    print(f"[NOTIFICATION] Failed to start notification bot: {e}")
+                    return
+            else:
+                print("[NOTIFICATION] No notification bot token configured")
+                return
+
+        await notification_bot.send_message(
+            int(channel_id),
+            message_text,
+            parse_mode='html',
+            buttons=buttons
+        )
+        print(f"[NOTIFICATION] Sent to channel {channel_id}")
     except Exception as e:
-        print(f"[NOTIFICATION] Error: {e}")
+        print(f"[NOTIFICATION] Error sending to channel: {e}")
+        import traceback
+        traceback.print_exc()
 
 async def notify_new_user(user_id, username, first_name, last_name, phone=None):
     """Notify admin about new user registration"""
     try:
-        user_count = users_col.count_documents({})
-        plan = "Scout (Free)"
+        from datetime import timezone, timedelta
         
-        join_time = datetime.now().strftime("%d %b %Y, %I:%M %p")
+        user_count = users_col.count_documents({})
+        
+        # Convert to IST (UTC+5:30)
+        ist = timezone(timedelta(hours=5, minutes=30))
+        join_time = datetime.now(ist).strftime("%d %b %Y, %I:%M %p")
         
         text = (
             f"🆕 <b>New User Registered!</b>\n\n"
@@ -6899,68 +6851,139 @@ async def notify_new_user(user_id, username, first_name, last_name, phone=None):
             f"<b>👤 User Details:</b>\n"
             f"├ <b>Name:</b> {first_name} {last_name or ''}\n"
             f"├ <b>Username:</b> @{username if username else 'No Username'}\n"
-            f"├ <b>User ID:</b> <code>{user_id}</code>\n"
-        )
-        
-        if phone:
-            text += f"└ <b>Phone:</b> <code>{phone}</code>\n\n"
-        else:
-            text += f"└ <b>Phone:</b> Not Available\n\n"
-        
-        text += (
+            f"└ <b>User ID:</b> <code>{user_id}</code>\n\n"
             f"<b>📊 Account Stats:</b>\n"
-            f"├ <b>Plan:</b> {plan}\n"
-            f"├ <b>Joined:</b> {join_time}\n"
             f"└ <b>Total Users Now:</b> {user_count:,}\n\n"
             f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
         )
         
-        buttons = [
-            [
-                Button.inline("💎 Grant Premium", f"notif_grant_{user_id}"),
-                Button.inline("🚫 Ban User", f"notif_ban_{user_id}")
-            ],
-            [Button.inline("👤 View Profile", f"notif_profile_{user_id}")]
-        ]
-        
-        await send_notification(text, buttons)
+        # No buttons - just notification
+        print(f"[NOTIFICATION] Sending new user notification for {user_id}")
+        await send_notification(text, buttons=None)
+        print(f"[NOTIFICATION] New user notification sent successfully")
     except Exception as e:
         print(f"[NOTIFICATION] Error in notify_new_user: {e}")
+        import traceback
+        traceback.print_exc()
 
 async def notify_premium_purchase(user_id, username, first_name, plan_name, price, duration_days):
     """Notify admin about premium purchase"""
     try:
-        # Calculate today's revenue
-        from datetime import timezone
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        from datetime import timezone, timedelta
         
-        # This is a placeholder - you'd need to track actual payments in DB
+        # Calculate today's revenue
         total_revenue_today = price  # Simplified
         
-        purchase_time = datetime.now().strftime("%d %b %Y, %I:%M %p")
+        # Convert to IST (UTC+5:30)
+        ist = timezone(timedelta(hours=5, minutes=30))
+        purchase_time = datetime.now(ist).strftime("%d %b %Y, %I:%M %p")
+        
+        # Build clean username display
+        username_display = f"@{username}" if username else f"ID: {user_id}"
         
         text = (
             f"💎 <b>Premium Plan Purchased!</b>\n\n"
             f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-            f"<b>User:</b> {first_name} (@{username if username else 'No Username'})\n"
-            f"<b>Plan:</b> {plan_name} (₹{price})\n"
-            f"<b>Duration:</b> {duration_days} days\n"
-            f"<b>Payment Method:</b> UPI\n"
-            f"<b>Time:</b> {purchase_time}\n"
-            f"<b>Total Revenue Today:</b> ₹{total_revenue_today:,}\n\n"
+            f"<b>👤 User Details:</b>\n"
+            f"├ <b>Username:</b> <code>{username_display}</code>\n"
+            f"└ <b>User ID:</b> <code>{user_id}</code>\n\n"
+            f"<b>💳 Purchase Details:</b>\n"
+            f"├ <b>Plan:</b> {plan_name} (₹{price})\n"
+            f"├ <b>Duration:</b> {duration_days} days\n"
+            f"├ <b>Payment:</b> UPI\n"
+            f"└ <b>Time:</b> {purchase_time}\n\n"
+            f"<b>📊 Revenue:</b>\n"
+            f"└ <b>Today:</b> ₹{total_revenue_today:,}\n\n"
             f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
         )
         
-        buttons = [[Button.inline("👤 View User", f"notif_profile_{user_id}")]]
-        
-        await send_notification(text, buttons)
+        # No buttons - just notification
+        print(f"[NOTIFICATION] Sending premium purchase notification for user {user_id}, plan {plan_name}")
+        await send_notification(text, buttons=None)
+        print(f"[NOTIFICATION] Premium purchase notification sent successfully")
     except Exception as e:
         print(f"[NOTIFICATION] Error in notify_premium_purchase: {e}")
+        import traceback
+        traceback.print_exc()
+
+async def grant_premium_to_user(target_id: int, plan_key: str, days: int, *, source: str = "unknown"):
+    """Single source of truth for premium granting + user DM + channel log."""
+    plan_key = plan_key.lower().strip()
+    plan_map = {
+        'grow': {'max_accounts': 3, 'price': 69, 'name': 'Grow', 'image_key': 'grow'},
+        'prime': {'max_accounts': 7, 'price': 199, 'name': 'Prime', 'image_key': 'prime'},
+        'domi': {'max_accounts': 15, 'price': 389, 'name': 'Dominion', 'image_key': 'dominion'},
+        'dominion': {'max_accounts': 15, 'price': 389, 'name': 'Dominion', 'image_key': 'dominion'},
+    }
+    if plan_key not in plan_map:
+        raise ValueError(f"Invalid plan_key: {plan_key}")
+
+    plan_info = plan_map[plan_key]
+    expires_at = datetime.now() + timedelta(days=int(days))
+
+    # DB update (consistent fields)
+    users_col.update_one(
+        {'user_id': int(target_id)},
+        {'$set': {
+            'tier': 'premium',
+            'plan': 'dominion' if plan_key in ('domi', 'dominion') else plan_key,
+            'plan_name': plan_info['name'],
+            'max_accounts': plan_info['max_accounts'],
+            'premium_granted_at': datetime.now(),
+            'premium_expires_at': expires_at,
+            'premium_expiry': expires_at,
+            'approved': True,
+        }},
+        upsert=True
+    )
+
+    # Notify user (DM)
+    try:
+        plan_image = PLAN_IMAGES.get(plan_info['image_key'])
+        notify_text = (
+            "<b>🎉 Premium Activated!</b>\n\n"
+            "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+            f"<b>Your Plan:</b> {plan_info['name']}\n"
+            f"<b>Max Accounts:</b> <code>{plan_info['max_accounts']}</code>\n"
+            f"<b>Duration:</b> <code>{days} days</code>\n"
+            f"<b>Expires:</b> <code>{expires_at.strftime('%d %b %Y')}</code>\n\n"
+            "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+            "<i>Your premium plan has been activated. Enjoy all features!</i>"
+        )
+        notify_buttons = [[Button.inline("AztechAds Now!", b"enter_dashboard")]]
+        if plan_image:
+            await main_bot.send_file(target_id, plan_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
+        else:
+            await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
+    except Exception as e:
+        print(f"[PREMIUM] Failed to notify user {target_id}: {e}")
+
+    # Channel log
+    try:
+        target_user = users_col.find_one({'user_id': int(target_id)}) or {}
+        await notify_premium_purchase(
+            int(target_id),
+            target_user.get('username', ''),
+            target_user.get('first_name', 'Unknown'),
+            plan_info['name'],
+            plan_info['price'],
+            int(days)
+        )
+        print(f"[PREMIUM] Channel log sent ({source})")
+    except Exception as e:
+        print(f"[PREMIUM] Channel log failed ({source}): {e}")
+
+    return expires_at
+
 
 async def notify_account_added(user_id, username, phone, account_phone, plan_name, total_accounts, max_accounts):
     """Notify admin about new account addition"""
     try:
-        add_time = datetime.now().strftime("%d %b %Y, %I:%M %p")
+        from datetime import timezone, timedelta
+        
+        # Convert to IST (UTC+5:30)
+        ist = timezone(timedelta(hours=5, minutes=30))
+        add_time = datetime.now(ist).strftime("%d %b %Y, %I:%M %p")
         
         text = (
             f"📱 <b>New Account Added!</b>\n\n"
@@ -6972,11 +6995,14 @@ async def notify_account_added(user_id, username, phone, account_phone, plan_nam
             f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>"
         )
         
-        buttons = [[Button.inline("👤 View User", f"notif_profile_{user_id}")]]
-        
-        await send_notification(text, buttons)
+        # No buttons - just notification
+        print(f"[NOTIFICATION] Sending account added notification for user {user_id}, phone {account_phone}")
+        await send_notification(text, buttons=None)
+        print(f"[NOTIFICATION] Account added notification sent successfully")
     except Exception as e:
         print(f"[NOTIFICATION] Error in notify_account_added: {e}")
+        import traceback
+        traceback.print_exc()
 
 # Notification callback handlers
 @main_bot.on(events.CallbackQuery(pattern=b"^notif_"))
@@ -7038,81 +7064,20 @@ async def handle_notification_actions(event):
         plan = parts[1]
         target_user_id = int(parts[2])
         days = int(parts[3])
-        
-        # Grant premium
+
         try:
-            from datetime import timedelta
-            
-            plan_details = {
-                'grow': {'max_accounts': 3, 'price': 69, 'name': 'Grow'},
-                'prime': {'max_accounts': 7, 'price': 199, 'name': 'Prime'},
-                'domi': {'max_accounts': 15, 'price': 389, 'name': 'Dominion'}
-            }
-            
-            plan_info = plan_details[plan]
-            expires_at = datetime.now() + timedelta(days=days)
-            
-            users_col.update_one(
-                {'user_id': target_user_id},
-                {'$set': {
-                    'tier': 'premium',
-                    'max_accounts': plan_info['max_accounts'],
-                    'plan': plan,
-                    'plan_name': plan_info['name'],
-                    'premium_granted_at': datetime.now(),
-                    'premium_expires_at': expires_at,
-                    'premium_expiry': expires_at,
-                    'approved': True
-                }},
-                upsert=True
-            )
-            
-            # Send notification to user
-            plan_images = {'grow': PLAN_IMAGES.get('grow'), 'prime': PLAN_IMAGES.get('prime'), 'domi': PLAN_IMAGES.get('dominion')}
-            plan_image = plan_images.get(plan)
-            
-            notify_text = (
-                f"<b>🎉 Premium Activated!</b>\n\n"
-                f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                f"<b>Your Plan:</b> {plan_info['name']}\n"
-                f"<b>Max Accounts:</b> <code>{plan_info['max_accounts']}</code>\n"
-                f"<b>Duration:</b> <code>{days} days</code>\n\n"
-                f"<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                f"<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
-            )
-            
-            try:
-                if plan_image:
-                    await main_bot.send_file(target_user_id, plan_image, caption=notify_text, parse_mode='html')
-                else:
-                    await main_bot.send_message(target_user_id, notify_text, parse_mode='html')
-            except:
-                pass
-            
-            # Send channel notification
-            target_user = users_col.find_one({'user_id': target_user_id})
-            if target_user:
-                asyncio.create_task(notify_premium_purchase(
-                    target_user_id,
-                    target_user.get('username', 'No Username'),
-                    target_user.get('first_name', 'Unknown'),
-                    plan_info['name'],
-                    plan_info['price'],
-                    days
-                ))
-            
+            expires_at = await grant_premium_to_user(target_user_id, plan, days, source='admin_panel')
             await event.edit(
                 f"<b>✅ Premium Granted!</b>\n\n"
                 f"<b>User ID:</b> <code>{target_user_id}</code>\n"
-                f"<b>Plan:</b> {plan_info['name']}\n"
+                f"<b>Plan:</b> {plan.capitalize()}\n"
                 f"<b>Duration:</b> {days} days\n"
                 f"<b>Expires:</b> {expires_at.strftime('%d %b %Y')}\n\n"
                 f"<i>User has been notified!</i>",
                 parse_mode='html'
             )
-            
         except Exception as e:
-            await event.answer(f"Error: {str(e)[:100]}", alert=True)
+            await event.answer(f"Error: {str(e)[:120]}", alert=True)
     
     elif data.startswith("notif_ban_"):
         target_user_id = int(data.split("_")[2])
@@ -8015,193 +7980,56 @@ async def admin_grant_premium_menu(event):
     await event.edit(help_text, parse_mode='html', buttons=[[Button.inline("← Back", b"admin_panel")]])
 
 
-@main_bot.on(events.NewMessage(pattern=r'^/grow (\d+) (\d+)'))
+# Admin commands for granting premium: /grow userid days, /prime userid days, /domi userid days
+@main_bot.on(events.NewMessage(pattern=r'^/grow\s+(\d+)\s+(\d+)$'))
 async def cmd_grow(event):
     if not is_admin(event.sender_id):
         return
-    
+
     target_id = int(event.pattern_match.group(1))
     days = int(event.pattern_match.group(2))
-    
-    # Grant Grow plan (3 accounts)
-    expires_at = datetime.now() + timedelta(days=days)
-    users_col.update_one(
-        {'user_id': target_id},
-        {'$set': {
-            'tier': 'premium',
-            'max_accounts': 3,
-            'plan_name': 'Grow',
-            'premium_granted_at': datetime.now(),
-            'premium_expires_at': expires_at,
-            'approved': True
-        }},
-        upsert=True
-    )
-    
-    # Send notification to user with plan-specific image
-    grow_image = PLAN_IMAGES.get('grow')
-    notify_text = (
-        "<b>🎉 Premium Activated!</b>\n\n"
-        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-        "<b>Your Plan:</b> 📈 <b>Grow</b>\n"
-        "<b>Max Accounts:</b> <code>3</code>\n"
-        "<b>Duration:</b> <code>" + str(days) + " days</code>\n\n"
-        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-        "<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
-    )
-    notify_buttons = [
-        [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
-    ]
-    
-    # Send notification to channel
+
     try:
-        target_user = users_col.find_one({'user_id': target_id})
-        if target_user:
-            asyncio.create_task(notify_premium_purchase(
-                target_id,
-                target_user.get('username', 'No Username'),
-                target_user.get('first_name', 'Unknown'),
-                'Grow',
-                69,
-                days
-            ))
-    except Exception as e:
-        print(f"[NOTIFICATION] Premium purchase notification error: {e}")
-    
-    try:
-        if grow_image:
-            await main_bot.send_file(target_id, grow_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
-        else:
-            await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
+        expires_at = await grant_premium_to_user(target_id, 'grow', days, source='/grow')
         await event.respond(f"✅ Grow plan granted to {target_id} for {days} days")
+        print(f"[ADMIN CMD] /grow: User {target_id} granted Grow for {days} days")
     except Exception as e:
-        await event.respond(f"✅ Granted but couldn't notify user: {e}")
+        await event.respond(f"❌ Failed to grant Grow: {str(e)[:120]}")
+        print(f"[ADMIN CMD] /grow failed: {e}")
 
 
-@main_bot.on(events.NewMessage(pattern=r'^/prime (\d+) (\d+)'))
+@main_bot.on(events.NewMessage(pattern=r'^/prime\s+(\d+)\s+(\d+)$'))
 async def cmd_prime(event):
     if not is_admin(event.sender_id):
         return
-    
+
     target_id = int(event.pattern_match.group(1))
     days = int(event.pattern_match.group(2))
-    
-    # Grant Prime plan (7 accounts)
-    expires_at = datetime.now() + timedelta(days=days)
-    users_col.update_one(
-        {'user_id': target_id},
-        {'$set': {
-            'tier': 'premium',
-            'max_accounts': 7,
-            'plan_name': 'Prime',
-            'premium_granted_at': datetime.now(),
-            'premium_expires_at': expires_at,
-            'approved': True
-        }},
-        upsert=True
-    )
-    
-    # Send notification to user with plan-specific image
-    prime_image = PLAN_IMAGES.get('prime')
-    notify_text = (
-        "<b>🎉 Premium Activated!</b>\n\n"
-        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-        "<b>Your Plan:</b> ⭐ <b>Prime</b>\n"
-        "<b>Max Accounts:</b> <code>7</code>\n"
-        "<b>Duration:</b> <code>" + str(days) + " days</code>\n\n"
-        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-        "<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
-    )
-    notify_buttons = [
-        [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
-    ]
-    
-    # Send notification to channel
+
     try:
-        target_user = users_col.find_one({'user_id': target_id})
-        if target_user:
-            asyncio.create_task(notify_premium_purchase(
-                target_id,
-                target_user.get('username', 'No Username'),
-                target_user.get('first_name', 'Unknown'),
-                'Prime',
-                199,
-                days
-            ))
-    except Exception as e:
-        print(f"[NOTIFICATION] Premium purchase notification error: {e}")
-    
-    try:
-        if prime_image:
-            await main_bot.send_file(target_id, prime_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
-        else:
-            await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
+        expires_at = await grant_premium_to_user(target_id, 'prime', days, source='/prime')
         await event.respond(f"✅ Prime plan granted to {target_id} for {days} days")
+        print(f"[ADMIN CMD] /prime: User {target_id} granted Prime for {days} days")
     except Exception as e:
-        await event.respond(f"✅ Granted but couldn't notify user: {e}")
+        await event.respond(f"❌ Failed to grant Prime: {str(e)[:120]}")
+        print(f"[ADMIN CMD] /prime failed: {e}")
 
 
-@main_bot.on(events.NewMessage(pattern=r'^/domi (\d+) (\d+)'))
+@main_bot.on(events.NewMessage(pattern=r'^/domi\s+(\d+)\s+(\d+)$'))
 async def cmd_domi(event):
     if not is_admin(event.sender_id):
         return
-    
+
     target_id = int(event.pattern_match.group(1))
     days = int(event.pattern_match.group(2))
-    
-    # Grant Dominion plan (15 accounts)
-    expires_at = datetime.now() + timedelta(days=days)
-    users_col.update_one(
-        {'user_id': target_id},
-        {'$set': {
-            'tier': 'premium',
-            'max_accounts': 15,
-            'plan_name': 'Dominion',
-            'premium_granted_at': datetime.now(),
-            'premium_expires_at': expires_at,
-            'approved': True
-        }},
-        upsert=True
-    )
-    
-    # Send notification to user with plan-specific image
-    dominion_image = PLAN_IMAGES.get('dominion')
-    notify_text = (
-        "<b>🎉 Premium Activated!</b>\n\n"
-        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-        "<b>Your Plan:</b> 👑 <b>Dominion</b>\n"
-        "<b>Max Accounts:</b> <code>15</code>\n"
-        "<b>Duration:</b> <code>" + str(days) + " days</code>\n\n"
-        "<b>━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-        "<i>Your premium plan has been activated by admin! Enjoy all features.</i>"
-    )
-    notify_buttons = [
-        [Button.inline("Check Plans", b"back_plans"), Button.inline("AztechAds Now!", b"enter_dashboard")]
-    ]
-    
-    # Send notification to channel
+
     try:
-        target_user = users_col.find_one({'user_id': target_id})
-        if target_user:
-            asyncio.create_task(notify_premium_purchase(
-                target_id,
-                target_user.get('username', 'No Username'),
-                target_user.get('first_name', 'Unknown'),
-                'Dominion',
-                389,
-                days
-            ))
-    except Exception as e:
-        print(f"[NOTIFICATION] Premium purchase notification error: {e}")
-    
-    try:
-        if dominion_image:
-            await main_bot.send_file(target_id, dominion_image, caption=notify_text, parse_mode='html', buttons=notify_buttons)
-        else:
-            await main_bot.send_message(target_id, notify_text, parse_mode='html', buttons=notify_buttons)
+        expires_at = await grant_premium_to_user(target_id, 'domi', days, source='/domi')
         await event.respond(f"✅ Dominion plan granted to {target_id} for {days} days")
+        print(f"[ADMIN CMD] /domi: User {target_id} granted Dominion for {days} days")
     except Exception as e:
-        await event.respond(f"✅ Granted but couldn't notify user: {e}")
+        await event.respond(f"❌ Failed to grant Dominion: {str(e)[:120]}")
+        print(f"[ADMIN CMD] /domi failed: {e}")
 if __name__ == '__main__':
     try:
         asyncio.run(main())
