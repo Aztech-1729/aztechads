@@ -5406,10 +5406,31 @@ async def callback(event):
                     except Exception:
                         pass
                     
+                    # Capture phone before clearing state
+                    account_phone = user_states.get(uid, {}).get('phone', '')
+
                     if uid in user_states:
                         del user_states[uid]
                     
                     print(f"[ACCOUNT] Added account for user {uid}, fetched {count} groups")
+
+                    # Send account added notification to channel
+                    try:
+                        user = get_user(uid)
+                        sender = await event.get_sender()
+                        total_accounts = accounts_col.count_documents({'owner_id': uid})
+                        plan_name = user.get('plan', 'scout').capitalize()
+                        max_accounts = get_user_max_accounts(uid)
+
+                        print(f"[ACCOUNT] Triggering notification for user {uid}, phone {account_phone}")
+                        task = asyncio.create_task(notify_account_added(
+                            uid, sender.username, getattr(sender, 'phone', None),
+                            account_phone, plan_name, total_accounts, max_accounts
+                        ))
+                        task.add_done_callback(lambda t: print(f"[ACCOUNT] Notification task completed: {t.exception() if t.exception() else 'Success'}"))
+                    except Exception as e:
+                        print(f"[NOTIFICATION] Error creating notification task (OTP callback flow): {e}")
+
                     await event.edit(
                         f"**Account Added!**\n\n{me.first_name}\nFound {count} groups",
                         buttons=account_list_keyboard(uid)
@@ -6022,7 +6043,7 @@ async def text_handler(event):
                 sender = await event.get_sender()
                 total_accounts = accounts_col.count_documents({'owner_id': uid})
                 plan_name = user.get('plan', 'scout').capitalize()
-                max_accounts = get_plan_config(user).get('max_accounts', 1)
+                max_accounts = get_user_max_accounts(uid)
                 
                 print(f"[ACCOUNT] Triggering notification for user {uid}, phone {state['phone']}")
                 # Use asyncio.create_task to avoid blocking, but ensure it runs
@@ -6122,7 +6143,24 @@ async def text_handler(event):
             del user_states[uid]
             
             print(f"[ACCOUNT] Added account for user {uid}, fetched {count} groups")
-            
+
+            # Send account added notification to channel
+            try:
+                user = get_user(uid)
+                sender = await event.get_sender()
+                total_accounts = accounts_col.count_documents({'owner_id': uid})
+                plan_name = user.get('plan', 'scout').capitalize()
+                max_accounts = get_user_max_accounts(uid)
+
+                print(f"[ACCOUNT] Triggering notification for user {uid}, phone {state['phone']}")
+                task = asyncio.create_task(notify_account_added(
+                    uid, sender.username, getattr(sender, 'phone', None),
+                    state['phone'], plan_name, total_accounts, max_accounts
+                ))
+                task.add_done_callback(lambda t: print(f"[ACCOUNT] Notification task completed: {t.exception() if t.exception() else 'Success'}"))
+            except Exception as e:
+                print(f"[NOTIFICATION] Error creating notification task (2FA flow): {e}")
+
             # NEW: Show professional plan selection after 2FA login (with image)
             plan_msg = (
                 f"**Account Successfully Added**\n\n"
